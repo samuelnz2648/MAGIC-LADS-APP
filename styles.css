@@ -9,7 +9,6 @@
   --gold: #c9a24d;
   --gold-2: #e3c27a;
   --gold-ink: #241c08;
-  --red: #e0675e;
   --green: #4fbf87;
   --radius: 14px;
   --tabbar-h: 64px;
@@ -161,6 +160,7 @@ input[type="date"] { color-scheme: dark; }
 .pod li span { color: var(--muted); }
 .pod li.won b { color: var(--gold-2); }
 .game-notes { margin-top: 6px; font-size: 13px; color: var(--muted); font-style: italic; }
+.game-notes.error { color: #f3b0aa; }
 .empty { text-align: center; color: var(--muted); padding: 24px 8px; }
 
 /* Standings */
