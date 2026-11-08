@@ -1,6 +1,6 @@
 // Keeps the app's own files on the phone so it opens without signal.
 // Bump VERSION whenever the app's files change, so phones pick up the update.
-const VERSION = 'magic-lads-v4';
+const VERSION = 'magic-lads-v5';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',

@@ -236,6 +236,27 @@ function pruneDraft() {
   saveDraft();
 }
 
+// --------------------------------------------------------------------------- motion
+
+// Every animation answers something you did: a pick, a tab, a new game arriving.
+// Nothing plays with the phone's "reduce motion" setting on.
+const calmMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+const EASE_OUT = 'cubic-bezier(.2, .8, .2, 1)';
+
+/** Plays a one-off animation. Returns null (and does nothing) when motion is off or unsupported. */
+function play(el, keyframes, opts) {
+  if (!el || !el.animate || calmMotion.matches) return null;
+  return el.animate(keyframes, Object.assign({ duration: 220, easing: EASE_OUT }, opts));
+}
+
+const POP = [{ transform: 'scale(.92)' }, { transform: 'scale(1.05)', offset: 0.55 }, { transform: 'scale(1)' }];
+const VIEW_IN = [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }];
+const ARRIVE = [
+  { opacity: 0, transform: 'translateY(-8px) scale(.98)', boxShadow: '0 0 0 2px rgba(227, 194, 122, .9)' },
+  { opacity: 1, transform: 'none', boxShadow: '0 0 0 2px rgba(227, 194, 122, .9)', offset: 0.3 },
+  { opacity: 1, transform: 'none', boxShadow: '0 0 0 2px rgba(227, 194, 122, 0)' },
+];
+
 function renderForm() {
   const brackets = (data && data.brackets) || [];
   const players = (data && data.players) || [];
@@ -245,10 +266,14 @@ function renderForm() {
   $('#date').max = todayLocal();
 
   const chips = $('#brackets');
-  chips.replaceChildren(...brackets.map(b => h('button', {
+  chips.replaceChildren(...brackets.map((b, i) => h('button', {
     type: 'button', class: 'chip', role: 'radio', 'aria-checked': String(draft.bracket === b),
     'aria-label': b, text: b.replace(/^Bracket\s*/i, ''),
-    onclick: () => { draft.bracket = b; pruneDraft(); renderForm(); },
+    onclick: () => {
+      const changed = draft.bracket !== b;
+      draft.bracket = b; pruneDraft(); renderForm();
+      if (changed) play(chips.children[i], POP, { duration: 260 });
+    },
   })));
   if (!brackets.length) chips.replaceChildren(h('span', { class: 'muted small', text: 'Loading…' }));
 
@@ -294,9 +319,12 @@ function renderForm() {
   if (!chosen.length) {
     winners.replaceChildren(h('p', { class: 'muted small', text: 'Pick the players first.' }));
   } else {
-    winners.replaceChildren(...chosen.map(({ p, c }) => h('button', {
+    winners.replaceChildren(...chosen.map(({ p, c }, i) => h('button', {
       type: 'button', class: 'win', role: 'radio', 'aria-checked': String(draft.winner === p),
-      onclick: () => { draft.winner = draft.winner === p ? '' : p; saveDraft(); renderForm(); },
+      onclick: () => {
+        draft.winner = draft.winner === p ? '' : p; saveDraft(); renderForm();
+        if (draft.winner === p) play(winners.children[i], POP, { duration: 300 });
+      },
     }, h('b', { text: p }), h('small', { text: c || 'commander not picked' }))));
   }
 
@@ -340,8 +368,10 @@ async function submitGame(ev) {
 
   $('#submit').disabled = true;
   $('#submit').textContent = 'Logging…';
+  $('#submit').classList.add('busy');
   const done = await flushOutbox();
   $('#submit').textContent = 'Log game';
+  $('#submit').classList.remove('busy');
   renderForm();
 
   const mine = done.find(d => d.item.id === id);
@@ -450,7 +480,7 @@ function renderRecent() {
 
   for (const item of outbox.filter(i => i.type === 'logGame')) {
     const g = item.payload.game;
-    items.push(h('article', { class: 'game pending' },
+    items.push(h('article', { class: 'game pending', 'data-key': 'p:' + item.id },
       h('div', { class: 'game-top' },
         h('span', { class: 'no', text: 'New' }),
         h('span', { class: 'meta', text: `${niceDate(g.date)} · ${g.bracket}` }),
@@ -462,7 +492,7 @@ function renderRecent() {
   }
 
   for (const g of (data && data.recent) || []) {
-    items.push(h('article', { class: 'game' },
+    items.push(h('article', { class: 'game', 'data-key': ['g', g.number, g.date, g.winner].concat(g.players).join('|') },
       h('div', { class: 'game-top' },
         h('span', { class: 'no', text: g.number ? `#${g.number}` : '—' }),
         h('span', { class: 'meta', text: [niceDate(g.date), g.bracket].filter(Boolean).join(' · ') }),
@@ -473,6 +503,19 @@ function renderRecent() {
   }
 
   list.replaceChildren(...(items.length ? items : [h('p', { class: 'empty', text: data ? 'No games logged yet.' : 'Loading…' })]));
+  if (data) markNewGames();
+}
+
+let seenGames = null;   // the games Recent has already shown, so only new arrivals light up
+/** Lights up games that weren't there last time Recent was on screen. Called again when Recent is opened. */
+function markNewGames() {
+  const cards = $$('#recent-list article[data-key]');
+  const keys = new Set(cards.map(c => c.dataset.key));
+  if (!seenGames) { seenGames = keys; return; }    // the first lists loaded are the starting point
+  if ($('#view-recent').hidden) return;           // wait until Recent is opened
+  cards.filter(c => !seenGames.has(c.dataset.key))
+    .forEach((c, i) => play(c, ARRIVE, { duration: 1500, delay: i * 70 }));
+  seenGames = keys;
 }
 
 // --------------------------------------------------------------------------- standings
@@ -556,13 +599,30 @@ function renderOutbox() {
 }
 
 let toastTimer = null;
+let toastExit = null;
 function toast(msg, bad) {
   const t = $('#toast');
+  const showing = !t.hidden && !toastExit;
+  if (toastExit) { toastExit.cancel(); toastExit = null; }
   t.textContent = msg;
   t.classList.toggle('bad', !!bad);
   t.hidden = false;
+  if (showing) play(t, [{ transform: 'translateX(-50%) scale(.96)' }, { transform: 'translateX(-50%) scale(1)' }], { duration: 160 });
+  else play(t, [{ opacity: 0, transform: 'translate(-50%, 16px)' }, { opacity: 1, transform: 'translate(-50%, 0)' }], { duration: 260 });
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 6000 : 3500);
+  toastTimer = setTimeout(hideToast, bad ? 6000 : 3500);
+}
+
+function hideToast() {
+  const t = $('#toast');
+  const exit = play(t, [{ opacity: 1, transform: 'translate(-50%, 0)' }, { opacity: 0, transform: 'translate(-50%, 10px)' }],
+    { duration: 180, easing: 'ease-in', fill: 'forwards' });
+  if (!exit) { t.hidden = true; return; }
+  toastExit = exit;
+  exit.onfinish = () => {
+    if (toastExit !== exit) return;   // a new toast took over
+    t.hidden = true; exit.cancel(); toastExit = null;
+  };
 }
 
 function renderAll() {
@@ -575,10 +635,14 @@ function renderAll() {
 
 // --------------------------------------------------------------------------- navigation, install, start-up
 
+let currentView = 'log';
 function show(view) {
   for (const tab of $$('.tab')) tab.classList.toggle('active', tab.dataset.view === view);
   for (const sec of $$('.view')) sec.hidden = sec.id !== `view-${view}`;
   window.scrollTo(0, 0);
+  if (view !== currentView) play($(`#view-${view}`), VIEW_IN);
+  currentView = view;
+  if (view === 'recent') markNewGames();
   if (view !== 'log' && online && data && isStale()) refresh({ quiet: true });
 }
 
@@ -590,6 +654,7 @@ window.addEventListener('beforeinstallprompt', e => {
 });
 
 function setup() {
+  document.addEventListener('touchstart', () => {}, { passive: true });   // lets iOS show the :active press
   $$('.tab').forEach(t => t.addEventListener('click', () => show(t.dataset.view)));
   $('#refresh').addEventListener('click', async () => {
     const done = await flushOutbox();   // sending reloads the lists itself
