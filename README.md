@@ -14,7 +14,9 @@ A phone app for logging Magic Lads commander games straight into the group track
 phone app (GitHub Pages)  ──►  Apps Script web app (runs as Sam)  ──►  tracker Google Sheet
 ```
 
-The Apps Script runs as you, so the group doesn't need edit access to the sheet to log games through the app. There's no passcode: anyone with the app's link can log games, but nobody can change or delete them through the app or the script.
+The Apps Script runs as you, so the group doesn't need edit access to the sheet to log games through the app. There's no passcode: anyone with the app's link can log games and add commanders. Only people with edit access to the sheet can change or delete games.
+
+The same script also tidies up after you on the sheet: when you clear a game from the Games sheet, its Date cell gets the automatic date back, so the next game typed into that row gets that day's date.
 
 ## One-time setup
 
@@ -41,6 +43,6 @@ Push these files to the `MAGIC-LADS-APP` repository, then in the repo go to **Se
 
 ## Changing things later
 
-- **The app:** edit the files, bump `VERSION` in `sw.js` (e.g. `magic-lads-v2`) so phones pick up the change, and push. Phones get the new version the next time the app is opened twice.
+- **The app:** edit the files, bump `VERSION` in `sw.js` (e.g. `magic-lads-v4` to `magic-lads-v5`) so phones pick up the change, and push. Phones switch to the new version the next time the app is opened or brought back to the front.
 - **The Apps Script:** paste the new code, save, then **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. Editing the existing deployment keeps the same URL; a *new* deployment would give a new URL that the app doesn't know about.
-- **Sheet layout:** the script finds the Leaderboard and Top Decks by their titles on the Dashboard, and expects the Games, Decks, Players and Settings columns as they are now. If you move those columns, update `CFG` and the column numbers at the top of `Code.gs`.
+- **Sheet layout:** the script finds the Leaderboard and Top Decks by their titles on the Dashboard, and finds the Games, Decks and Players rows through the sheet's named ranges (`G_Num`, `K_Player`, `P_Name`), so inserting or deleting rows is fine. It expects the columns as they are now; if you move columns, update the constants at the top of `Code.gs`.

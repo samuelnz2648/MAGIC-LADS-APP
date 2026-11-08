@@ -12,6 +12,7 @@ const API_READY = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test
 const STORE = { data: 'ml.data.v1', outbox: 'ml.outbox.v1', draft: 'ml.draft.v1', hint: 'ml.ioshint.v1' };
 const NEW_DECK = '__new__';
 const SEATS = 4;
+const STALE_MS = 30000;   // lists older than this are reloaded when you come back to the app
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -65,7 +66,6 @@ let online = navigator.onLine;
 let lastError = '';
 let sending = false;
 let trackerBusy = false;
-let refreshing = false;
 
 function blankDraft(keepPod) {
   const prev = keepPod ? draft : null;
@@ -125,16 +125,36 @@ async function call(method, body) {
   try { json = await res.json(); }
   catch (e) { throw new NetworkError(`The tracker sent back something unexpected (HTTP ${res.status}).`); }
   if (!json.ok) {
-    if (json.retry || /busy/i.test(json.error || '')) throw new BusyError(json.error);
+    if (/busy/i.test(json.error || '')) throw new BusyError(json.error);
     throw new TrackerError(json.error || 'The tracker said no.');
   }
   return json;
 }
 
-async function refresh({ quiet } = {}) {
-  if (refreshing) return;
-  refreshing = true;
+function isStale() {
+  return !data || Date.now() - data.fetchedAt > STALE_MS;
+}
+
+/** Reloads the lists. A call made while a load is running waits for it, then loads again,
+ *  so a game sent during that load always shows up. */
+let refreshRun = null;
+let refreshAgain = false;
+function refresh(opts) {
+  if (refreshRun) { refreshAgain = true; return refreshRun; }
   $('#refresh').classList.add('spin');
+  refreshRun = (async () => {
+    do {
+      refreshAgain = false;
+      await loadData(opts);
+    } while (refreshAgain);
+  })().finally(() => {
+    refreshRun = null;
+    $('#refresh').classList.remove('spin');
+  });
+  return refreshRun;
+}
+
+async function loadData({ quiet } = {}) {
   try {
     const fresh = await call('GET');
     delete fresh.ok;
@@ -148,10 +168,14 @@ async function refresh({ quiet } = {}) {
     lastError = e.message;
     if (!quiet && !(e instanceof NetworkError)) toast(e.message, true);
   } finally {
-    refreshing = false;
-    $('#refresh').classList.remove('spin');
     renderAll();
   }
+}
+
+/** Sends anything waiting, then reloads the lists if sending didn't already (and they're stale, unless `force`). */
+async function sync({ force } = {}) {
+  const done = await flushOutbox();
+  if (!done.length && (force || isStale())) await refresh({ quiet: true });
 }
 
 /** Sends waiting requests in order. Calls made while a send is running wait their turn. */
@@ -216,7 +240,8 @@ function renderForm() {
   const brackets = (data && data.brackets) || [];
   const players = (data && data.players) || [];
 
-  $('#date').value = draft.date;
+  // Only when different: setting a field's value moves the cursor, even to the same text.
+  if ($('#date').value !== draft.date) $('#date').value = draft.date;
   $('#date').max = todayLocal();
 
   const chips = $('#brackets');
@@ -275,7 +300,7 @@ function renderForm() {
     }, h('b', { text: p }), h('small', { text: c || 'commander not picked' }))));
   }
 
-  $('#notes').value = draft.notes;
+  if ($('#notes').value !== draft.notes) $('#notes').value = draft.notes;
 
   const missing = whatsMissing();
   $('#submit').disabled = missing.length > 0 || !data;
@@ -373,29 +398,43 @@ async function suggestCards() {
 
 async function saveDeck(ev) {
   ev.preventDefault();
+  const seat = deckSeat;
   const player = $('#deck-player').value;
   const bracket = $('#deck-bracket').value;
   const commander = $('#deck-name').value.replace(/\s+/g, ' ').trim();
   const err = $('#deck-error');
   if (!commander) { err.textContent = "Type the commander's name."; err.hidden = false; return; }
   const existing = decksFor(player, bracket).find(d => d.commander.toLowerCase() === commander.toLowerCase());
-  if (!existing) {
-    const id = uid();
-    outbox.push({ id, type: 'addDeck', created: Date.now(), payload: { action: 'addDeck', clientId: id, player, bracket, commander } });
-    saveOutbox();
-  }
-  if (deckSeat !== null && player === draft.players[deckSeat] && bracket === draft.bracket) {
-    draft.commanders[deckSeat] = existing ? existing.commander : commander;
+  const forSeat = seat !== null && player === draft.players[seat] && bracket === draft.bracket;
+  if (forSeat) {
+    draft.commanders[seat] = existing ? existing.commander : commander;
     saveDraft();
   }
   $('#deck-dialog').close();
+  if (existing) { renderAll(); toast(`${existing.commander} is already on the Decks sheet.`); return; }
+
+  const id = uid();
+  outbox.push({ id, type: 'addDeck', created: Date.now(), payload: { action: 'addDeck', clientId: id, player, bracket, commander } });
+  saveOutbox();
   renderAll();
-  if (existing) { toast(`${existing.commander} is already on the Decks sheet.`); return; }
   const done = await flushOutbox();
-  const failed = outbox.find(i => i.type === 'addDeck' && i.error && i.payload.commander === commander);
-  if (done.some(d => d.item.type === 'addDeck' && d.item.payload.commander === commander)) toast(`${commander} added to ${player}'s decks.`);
-  else if (failed) toast(failed.error, true);
-  else toast(`${commander} saved on this phone. It will be added when you have signal.`);
+  const mine = done.find(d => d.item.id === id);
+  const failed = outbox.find(i => i.id === id && i.error);
+  if (mine) {
+    // The Decks sheet may already have it under different capitals: use its spelling.
+    const name = mine.result.commander || commander;
+    if (forSeat && name !== commander && draft.players[seat] === player && draft.bracket === bracket
+        && (!draft.commanders[seat] || draft.commanders[seat] === commander)) {
+      draft.commanders[seat] = name;
+      saveDraft();
+      renderForm();
+    }
+    toast(mine.result.existing ? `${name} is already on the Decks sheet.` : `${name} added to ${player}'s decks.`);
+  } else if (failed) {
+    toast(failed.error, true);
+  } else {
+    toast(`${commander} saved on this phone. It will be added when you have signal.`);
+  }
 }
 
 // --------------------------------------------------------------------------- recent games
@@ -438,10 +477,15 @@ function renderRecent() {
 
 // --------------------------------------------------------------------------- standings
 
+/** The Dashboard's caption for a table, minus its "see the Guide" pointer (the Guide is on the sheet). */
+function caption(table) {
+  return ((table && table.note) || '').split(' · ').filter(p => !/^see /i.test(p)).join(' · ');
+}
+
 function renderStandings() {
   const lb = data && data.leaderboard;
   const body = $('#lb-table tbody');
-  $('#lb-note').textContent = lb ? lb.note : '';
+  $('#lb-note').textContent = caption(lb);
   if (!lb || !lb.rows.length) {
     body.replaceChildren(h('tr', {}, h('td', { colspan: 5, class: 'empty', text: data ? 'No games yet.' : 'Loading…' })));
   } else {
@@ -457,7 +501,7 @@ function renderStandings() {
   }
 
   const td = data && data.topDecks;
-  $('#td-note').textContent = td ? td.note : '';
+  $('#td-note').textContent = caption(td);
   const rows = (td && td.rows) || [];
   $('#td-list').replaceChildren(...(rows.length ? rows.map(r => h('div', { class: 'deck' },
     h('div', { class: 'rank', text: r.Rank }),
@@ -535,7 +579,7 @@ function show(view) {
   for (const tab of $$('.tab')) tab.classList.toggle('active', tab.dataset.view === view);
   for (const sec of $$('.view')) sec.hidden = sec.id !== `view-${view}`;
   window.scrollTo(0, 0);
-  if (view !== 'log' && online && data && Date.now() - data.fetchedAt > 30000) refresh({ quiet: true });
+  if (view !== 'log' && online && data && isStale()) refresh({ quiet: true });
 }
 
 let installPrompt = null;
@@ -547,7 +591,10 @@ window.addEventListener('beforeinstallprompt', e => {
 
 function setup() {
   $$('.tab').forEach(t => t.addEventListener('click', () => show(t.dataset.view)));
-  $('#refresh').addEventListener('click', async () => { await flushOutbox(); await refresh(); });
+  $('#refresh').addEventListener('click', async () => {
+    const done = await flushOutbox();   // sending reloads the lists itself
+    if (!done.length) await refresh();
+  });
   $('#game-form').addEventListener('submit', submitGame);
   $('#date').addEventListener('change', e => { draft.date = e.target.value || todayLocal(); saveDraft(); });
   $('#notes').addEventListener('input', e => { draft.notes = e.target.value; saveDraft(); });
@@ -573,11 +620,12 @@ function setup() {
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
   if (ios && !standalone && !load(STORE.hint, false)) $('#ios-hint').hidden = false;
 
-  window.addEventListener('online', () => { online = true; flushOutbox().then(() => refresh({ quiet: true })); });
+  window.addEventListener('online', () => { online = true; sync({ force: true }); });
   window.addEventListener('offline', () => { online = false; renderAll(); });
+  // Switching back to the app reloads the lists only if they're stale: each load wakes the tracker.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    flushOutbox().then(() => refresh({ quiet: true }));
+    sync();
     // Phones often resume the app instead of reopening it, so check for a new version here too.
     if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
   });
@@ -586,7 +634,7 @@ function setup() {
   draft.date = todayLocal();   // a fresh start is a new day's games; change the date to back-log
   pruneDraft();
   renderAll();
-  if (API_READY) flushOutbox().then(() => refresh({ quiet: true }));
+  if (API_READY) sync({ force: true });
 
   if ('serviceWorker' in navigator) {
     // When a new version of the app has just been saved to the phone, switch to it straight away.

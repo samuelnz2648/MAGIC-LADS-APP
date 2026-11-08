@@ -9,25 +9,34 @@
  * to log games through the app. Games can only be added here, never changed or
  * deleted: fixing or deleting a game is done on the Games sheet itself.
  *
+ * It also has an onEdit trigger for the sheet: when a Games row is emptied, the
+ * row gets its automatic Date back (see onEdit below).
+ *
  * @OnlyCurrentDoc
  */
 
 const CFG = {
-  firstRow: 5,                 // first data row on Games, Decks and Players
-  gamesLastRow: 2004,          // the Games sheet's formulas run to this row
-  decksLastRow: 504,
-  playersRange: 'Players!B5:B34',
-  gameBracketsRange: 'Settings!F5:F9',
-  deckBracketsRange: 'Settings!G5:G9',
+  bracketsRange: 'Settings!F5:G9',   // F: game brackets, G: deck brackets
   recentCount: 10,
-  rememberIds: 500,            // how many request IDs to remember, so a retried request isn't logged twice
+  rememberIds: 500,                  // how many request IDs to remember, so a retried request isn't logged twice
 };
 
-// Games columns B..M (2..13): Bracket, Player 1-4, Commander 1-4, Winner, Notes, Date
-const GAME_FIRST_COL = 2;
-const GAME_COLS = 12;
+// The rows each sheet's formulas cover come from the sheet's named ranges, so they
+// stay right if rows are inserted or deleted.
+const GAMES_RANGE = 'G_Num';     // Games!A5:A2004
+const DECKS_RANGE = 'K_Player';  // Decks!B5:B504
+const PLAYERS_RANGE = 'P_Name';  // Players!B5:B34
+
+// Games columns: A #, B Bracket, C-F Player 1-4, G-J Commander 1-4, K Winner, L Notes,
+// M Date, N Winning Commander, O Status. The app writes B..M.
+const GAME_FIRST_COL = 2;    // B
+const GAME_COLS = 12;        // B..M
+const GAMES_WIDTH = 15;      // A..O
+const DATE_COL = 13;         // M
 const DATE_FORMULA_R1C1 = '=IF(COUNTA(RC2:RC12)=0,"",IF(N(RC)=0,TODAY(),RC))';
 const DECK_OPTION_WIDTH = 60;   // DeckOptions: one 60-column block per seat
+
+const ID_PREFIX = 'req:';
 
 // --------------------------------------------------------------------------- web entry points
 
@@ -35,7 +44,6 @@ function doGet(e) {
   return respond_(() => {
     const action = (e && e.parameter && e.parameter.action) || 'data';
     if (action === 'data') return getData_();
-    if (action === 'ping') return { pong: true };
     throw userError_('Unknown request.');
   });
 }
@@ -84,32 +92,80 @@ function withLock_(fn) {
   }
 }
 
+// --------------------------------------------------------------------------- sheet trigger
+
+/**
+ * Runs by itself on every edit made in the spreadsheet. When a Games row is emptied
+ * (Bracket to Notes cleared), its Date cell gets the auto-date formula back. A game
+ * logged from the app has its date typed in, which would otherwise stay behind after
+ * the game is cleared and end up on the next game typed into that row.
+ */
+function onEdit(e) {
+  const range = e && e.range;
+  if (!range || range.getSheet().getName() !== 'Games') return;
+  if (range.getColumn() > 12 || range.getLastColumn() < 2) return;   // only edits in B..L
+  const g = gameRows_(e.source);
+  const top = Math.max(range.getRow(), g.first);
+  const bottom = Math.min(range.getLastRow(), g.first + g.count - 1);
+  if (top > bottom) return;
+  const n = bottom - top + 1;
+  const values = g.sheet.getRange(top, 2, n, 11).getValues();             // B..L
+  const formulas = g.sheet.getRange(top, DATE_COL, n, 1).getFormulas();   // M
+  for (let i = 0; i < n; i++) {
+    if (formulas[i][0] || values[i].some(v => v !== '')) continue;
+    g.sheet.getRange(top + i, DATE_COL).setFormulaR1C1(DATE_FORMULA_R1C1);
+  }
+}
+
 // --------------------------------------------------------------------------- reading
 
 function getData_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const brackets = bracketLists_(ss);
   const dash = ss.getSheetByName('Dashboard');
+  const grid = dash.getRange(1, 1, Math.min(dash.getMaxRows(), 120), 14).getDisplayValues();
   return {
-    brackets: listOf_(ss.getRange(CFG.gameBracketsRange).getDisplayValues()),
-    deckBrackets: listOf_(ss.getRange(CFG.deckBracketsRange).getDisplayValues()),
-    players: listOf_(ss.getRange(CFG.playersRange).getDisplayValues()),
+    brackets: brackets.game,
+    deckBrackets: brackets.deck,
+    players: players_(ss),
     decks: okDecks_(ss),
     recent: recentGames_(ss),
-    leaderboard: dashTable_(dash, 'Leaderboard', 'Player'),
-    topDecks: dashTable_(dash, 'Top Decks', 'Commander'),
-    today: today_(ss),
+    leaderboard: dashTable_(grid, 'Leaderboard', 'Player'),
+    topDecks: dashTable_(grid, 'Top Decks', 'Commander'),
   };
 }
 
-function listOf_(rows) {
-  return rows.map(r => String(r[0]).trim()).filter(v => v !== '');
+function named_(ss, name) {
+  const range = ss.getRangeByName(name);
+  if (!range) throw userError_('The tracker is missing its ' + name + ' named range (Data > Named ranges).');
+  return range;
+}
+
+/** Where a sheet's rows are: {sheet, first, count}. */
+function rowsOf_(ss, name) {
+  const range = named_(ss, name);
+  return { sheet: range.getSheet(), first: range.getRow(), count: range.getNumRows() };
+}
+function gameRows_(ss) { return rowsOf_(ss, GAMES_RANGE); }
+function deckRows_(ss) { return rowsOf_(ss, DECKS_RANGE); }
+
+function listOf_(values) {
+  return values.map(v => String(v).trim()).filter(v => v !== '');
+}
+
+function bracketLists_(ss) {
+  const rows = ss.getRange(CFG.bracketsRange).getDisplayValues();
+  return { game: listOf_(rows.map(r => r[0])), deck: listOf_(rows.map(r => r[1])) };
+}
+
+function players_(ss) {
+  return listOf_(named_(ss, PLAYERS_RANGE).getDisplayValues().map(r => r[0]));
 }
 
 /** Decks marked OK on the Decks sheet: the ones that can be picked for a game. */
 function okDecks_(ss) {
-  const sheet = ss.getSheetByName('Decks');
-  const n = CFG.decksLastRow - CFG.firstRow + 1;
-  const rows = sheet.getRange(CFG.firstRow, 2, n, 10).getDisplayValues();   // B..K
+  const k = deckRows_(ss);
+  const rows = k.sheet.getRange(k.first, 2, k.count, 10).getDisplayValues();   // B..K
   const decks = [];
   rows.forEach(r => {
     const player = r[0].trim(), commander = r[1].trim(), bracket = r[2].trim(), status = r[9].trim();
@@ -118,27 +174,26 @@ function okDecks_(ss) {
   return decks;
 }
 
-/** Every Games row (B..O) with something in it, as {row, values, display}. */
-function usedGameRows_(sheet) {
-  const n = CFG.gamesLastRow - CFG.firstRow + 1;
-  const range = sheet.getRange(CFG.firstRow, 1, n, 15);   // A..O
-  const values = range.getValues();
-  const display = range.getDisplayValues();
+/** Row numbers of the Games rows with anything in Bracket..Notes (B..L), top to bottom. */
+function usedGameRows_(g) {
+  const values = g.sheet.getRange(g.first, 2, g.count, 11).getValues();
   const used = [];
-  for (let i = 0; i < n; i++) {
-    if (values[i].slice(1, 12).some(v => v !== '' && v !== null)) {
-      used.push({ row: CFG.firstRow + i, values: values[i], display: display[i] });
-    }
-  }
+  values.forEach((r, i) => {
+    if (r.some(v => v !== '')) used.push(g.first + i);
+  });
   return used;
 }
 
 function recentGames_(ss) {
-  const used = usedGameRows_(ss.getSheetByName('Games'));
-  return used.slice(-CFG.recentCount).reverse().map(g => {
-    const d = g.display;
+  const g = gameRows_(ss);
+  const rows = usedGameRows_(g).slice(-CFG.recentCount);
+  if (!rows.length) return [];
+  const top = rows[0];
+  // Only the rows shown are read as the sheet displays them (the slow kind of read).
+  const display = g.sheet.getRange(top, 1, rows[rows.length - 1] - top + 1, GAMES_WIDTH).getDisplayValues();
+  return rows.reverse().map(row => {
+    const d = display[row - top];
     return {
-      row: g.row,
       number: d[0],
       bracket: d[1],
       players: d.slice(2, 6),
@@ -153,22 +208,20 @@ function recentGames_(ss) {
 }
 
 /** A table on the Dashboard: the title cell, a header row under it, rows until `keyHeader` is blank. */
-function dashTable_(sheet, title, keyHeader) {
-  const grid = sheet.getRange(1, 1, Math.min(sheet.getMaxRows(), 120), 14).getDisplayValues();
+function dashTable_(grid, title, keyHeader) {
   let r0 = -1, c0 = -1;
   for (let r = 0; r < grid.length && r0 < 0; r++) {
     for (let c = 0; c < grid[r].length; c++) {
       if (grid[r][c].trim() === title) { r0 = r; c0 = c; break; }
     }
   }
-  if (r0 < 0) return { title, note: '', headers: [], rows: [] };
+  if (r0 < 0 || r0 + 1 >= grid.length) return { note: '', rows: [] };
   let note = '';
   for (let c = c0 + 1; c < grid[r0].length; c++) {
     if (grid[r0][c].trim()) { note = grid[r0][c].trim(); break; }
   }
-  const hdr = grid[r0 + 1];
   const cols = [];
-  hdr.forEach((h, c) => { if (h.trim()) cols.push([c, h.trim()]); });
+  grid[r0 + 1].forEach((h, c) => { if (h.trim()) cols.push([c, h.trim()]); });
   const keyCol = (cols.find(([, h]) => h === keyHeader) || [])[0];
   const rows = [];
   for (let r = r0 + 2; r < grid.length; r++) {
@@ -177,7 +230,7 @@ function dashTable_(sheet, title, keyHeader) {
     cols.forEach(([c, h]) => { row[h] = grid[r][c].trim(); });
     rows.push(row);
   }
-  return { title, note, headers: cols.map(([, h]) => h), rows };
+  return { note, rows };
 }
 
 function today_(ss) {
@@ -187,13 +240,12 @@ function today_(ss) {
 // --------------------------------------------------------------------------- writing
 
 function logGame_(req) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('Games');
   if (seenBefore_(req.clientId)) return { duplicate: true };
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   const g = req.game || {};
-  const brackets = listOf_(ss.getRange(CFG.gameBracketsRange).getDisplayValues());
-  const players = listOf_(ss.getRange(CFG.playersRange).getDisplayValues());
+  const brackets = bracketLists_(ss).game;
+  const players = players_(ss);
   const bracket = clean_(g.bracket);
   const who = (g.players || []).map(clean_);
   const cmds = (g.commanders || []).map(clean_);
@@ -205,8 +257,8 @@ function logGame_(req) {
   who.forEach(p => {
     if (players.indexOf(p) < 0) throw userError_(p + " isn't on the Players sheet.");
   });
-  const decks = okDecks_(ss);
   if (cmds.length !== 4) throw userError_("Pick each player's commander.");
+  const decks = okDecks_(ss);
   cmds.forEach((c, i) => {
     if (!c) throw userError_('Pick a commander for ' + who[i] + '.');
     const ok = decks.some(d => d.player === who[i] && d.commander === c && d.bracket === bracket);
@@ -216,15 +268,18 @@ function logGame_(req) {
   const notes = safeText_(clean_(g.notes).slice(0, 300));
   const serial = dateSerial_(g.date, ss);
 
-  const used = usedGameRows_(sheet);
-  const row = used.length ? used[used.length - 1].row + 1 : CFG.firstRow;
-  if (row > CFG.gamesLastRow) throw userError_('The Games sheet is full (2000 games). Extend it before logging more.');
+  const rows = gameRows_(ss);
+  const used = usedGameRows_(rows);
+  const row = used.length ? used[used.length - 1] + 1 : rows.first;
+  if (row > rows.first + rows.count - 1) {
+    throw userError_('The Games sheet is full (' + rows.count + ' games). Extend it before logging more.');
+  }
 
-  writeGameRow_(ss, sheet, row, bracket, who, cmds, winner, notes, serial);
+  writeGameRow_(ss, rows.sheet, row, bracket, who, cmds, winner, notes, serial);   // flushes, so the next request sees this row
   remember_(req.clientId);
 
-  const after = sheet.getRange(row, 1, 1, 15).getDisplayValues()[0];
-  return { row, number: after[0], date: after[12], winningCommander: after[13], status: after[14] };
+  const after = rows.sheet.getRange(row, 1, 1, GAMES_WIDTH).getDisplayValues()[0];
+  return { number: after[0], status: after[14] };
 }
 
 /**
@@ -265,39 +320,34 @@ function waitForDeckLists_(ss, row, cmds) {
 }
 
 function addDeck_(req) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('Decks');
   if (seenBefore_(req.clientId)) return { duplicate: true };
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  const players = listOf_(ss.getRange(CFG.playersRange).getDisplayValues());
-  const brackets = listOf_(ss.getRange(CFG.deckBracketsRange).getDisplayValues());
   const player = clean_(req.player);
   const bracket = clean_(req.bracket);
   const commander = safeText_(clean_(req.commander).slice(0, 150));
   const notes = safeText_(clean_(req.notes).slice(0, 200));
 
-  if (players.indexOf(player) < 0) throw userError_('Pick a player.');
-  if (brackets.indexOf(bracket) < 0) throw userError_('Pick a bracket.');
+  if (players_(ss).indexOf(player) < 0) throw userError_('Pick a player.');
+  if (bracketLists_(ss).deck.indexOf(bracket) < 0) throw userError_('Pick a bracket.');
   if (!commander) throw userError_("Type the commander's name.");
 
-  const n = CFG.decksLastRow - CFG.firstRow + 1;
-  const rows = sheet.getRange(CFG.firstRow, 2, n, 10).getDisplayValues();   // B..K
+  const k = deckRows_(ss);
+  const rows = k.sheet.getRange(k.first, 2, k.count, 4).getDisplayValues();   // B..E
   let empty = -1;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < rows.length; i++) {
     const [p, c, b, note] = rows[i].map(v => v.trim());
     if (p === player && c.toLowerCase() === commander.toLowerCase() && b === bracket) {
-      return { existing: true, row: CFG.firstRow + i, commander: c, status: rows[i][9] };
+      return { existing: true, commander: c };
     }
     if (empty < 0 && !p && !c && !b && !note) empty = i;
   }
   if (empty < 0) throw userError_('The Decks sheet is full. Make room before adding more.');
 
-  const row = CFG.firstRow + empty;
-  sheet.getRange(row, 2, 1, 4).setValues([[player, commander, bracket, notes]]);
+  k.sheet.getRange(k.first + empty, 2, 1, 4).setValues([[player, commander, bracket, notes]]);
   SpreadsheetApp.flush();
   remember_(req.clientId);
-  const status = sheet.getRange(row, 11).getDisplayValue();
-  return { row, commander, status };
+  return { commander };
 }
 
 // --------------------------------------------------------------------------- helpers
@@ -322,16 +372,29 @@ function dateSerial_(text, ss) {
   return utc / 86400000 + 25569;           // days since 1899-12-30
 }
 
+// Each request ID is its own script property ("req:<id>" -> when it was saved). One
+// property holding every ID would pass Apps Script's 9 KB limit per property.
+
 function seenBefore_(id) {
   if (!id) return false;
-  const ids = JSON.parse(PropertiesService.getScriptProperties().getProperty('requestIds') || '[]');
-  return ids.indexOf(String(id)) >= 0;
+  return PropertiesService.getScriptProperties().getProperty(ID_PREFIX + id) !== null;
 }
 
+/** Never throws: the sheet already has the change, so a failure here must not report one. */
 function remember_(id) {
   if (!id) return;
-  const props = PropertiesService.getScriptProperties();
-  const ids = JSON.parse(props.getProperty('requestIds') || '[]');
-  ids.push(String(id));
-  props.setProperty('requestIds', JSON.stringify(ids.slice(-CFG.rememberIds)));
+  try {
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty(ID_PREFIX + id, String(Date.now()));
+    const all = props.getProperties();
+    if (all.requestIds !== undefined) props.deleteProperty('requestIds');   // the old single-list format
+    const ids = Object.keys(all).filter(key => key.indexOf(ID_PREFIX) === 0);
+    if (ids.length > CFG.rememberIds) {
+      ids.sort((a, b) => Number(all[a]) - Number(all[b]))
+        .slice(0, ids.length - CFG.rememberIds)
+        .forEach(key => props.deleteProperty(key));
+    }
+  } catch (err) {
+    console.error(err);
+  }
 }
