@@ -430,30 +430,10 @@ function renderRecent() {
         h('span', { class: `badge ${g.status === 'OK' ? 'ok' : 'bad'}`, text: g.status || 'Incomplete' })),
       g.winner ? h('div', { class: 'game-winner' }, `🏆 ${g.winner}`, h('small', { text: g.winningCommander })) : null,
       podList(g.players, g.commanders, g.winner),
-      g.notes ? h('div', { class: 'game-notes', text: g.notes }) : null,
-      h('div', { class: 'game-actions' },
-        h('button', { type: 'button', class: 'link-btn', text: 'Delete', onclick: () => confirmDelete(g) }))));
+      g.notes ? h('div', { class: 'game-notes', text: g.notes }) : null));
   }
 
   list.replaceChildren(...(items.length ? items : [h('p', { class: 'empty', text: data ? 'No games logged yet.' : 'Loading…' })]));
-}
-
-async function confirmDelete(g) {
-  const dlg = $('#confirm-dialog');
-  $('#confirm-title').textContent = `Delete game ${g.number ? '#' + g.number : ''}?`;
-  $('#confirm-text').textContent = `${niceDate(g.date)}: ${g.players.join(', ')}. ${g.winner ? g.winner + ' won. ' : ''}This removes it from the tracker for everyone.`;
-  dlg.returnValue = '';
-  dlg.showModal();
-  const answer = await new Promise(res => dlg.addEventListener('close', () => res(dlg.returnValue), { once: true }));
-  if (answer !== 'ok') return;
-  try {
-    await call('POST', { action: 'deleteGame', row: g.row, key: g.key });
-    toast(`Game ${g.number ? '#' + g.number + ' ' : ''}deleted.`);
-    await refresh({ quiet: true });
-  } catch (e) {
-    toast(e instanceof BusyError ? 'The tracker is busy. Try again in a moment.' : e instanceof NetworkError ? 'You need signal to delete a game.' : e.message, true);
-    if (!(e instanceof NetworkError)) refresh({ quiet: true });
-  }
 }
 
 // --------------------------------------------------------------------------- standings

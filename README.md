@@ -4,7 +4,7 @@ A phone app for logging Magic Lads commander games straight into the group track
 
 - **Log game:** pick the bracket, the 4 players, their commanders and the winner. Only each player's decks for that bracket are offered, like the sheet's dropdowns. After logging, the same pod stays filled in for the next game.
 - **New commander:** pick "＋ New commander…" in a commander list to add a deck to the Decks sheet. Card names are suggested from Scryfall as you type.
-- **Recent:** the last 10 games, newest first, with a Delete button for mistakes. Deleting moves later games up so the log has no gaps.
+- **Recent:** the last 10 games, newest first. The app can only add games: to fix or delete one, edit it on the Games sheet.
 - **Standings:** the Dashboard's Leaderboard and Top Decks (they follow the Dashboard's Bracket filter).
 - **No signal?** The app still opens with the last lists it loaded. Games and new commanders logged offline wait on the phone and are sent, in order, as soon as it's back online. Sending the same game twice never logs it twice.
 
@@ -14,7 +14,7 @@ A phone app for logging Magic Lads commander games straight into the group track
 phone app (GitHub Pages)  ──►  Apps Script web app (runs as Sam)  ──►  tracker Google Sheet
 ```
 
-The Apps Script runs as you, so the group doesn't need edit access to the sheet to log games through the app. There's no passcode: anyone with the app's link can log and delete games.
+The Apps Script runs as you, so the group doesn't need edit access to the sheet to log games through the app. There's no passcode: anyone with the app's link can log games, but nobody can change or delete them through the app or the script.
 
 ## One-time setup
 

@@ -78,6 +78,7 @@
     <!-- Recent games -->
     <section id="view-recent" class="view" aria-label="Recent games" hidden>
       <h2 class="view-title">Recent games</h2>
+      <p class="muted small">To fix or delete a game, edit it on the Games sheet.</p>
       <div id="recent-list" class="list"></div>
     </section>
 
@@ -134,18 +135,6 @@
       <div class="dialog-actions">
         <button type="button" class="btn-ghost" value="cancel" id="deck-cancel">Cancel</button>
         <button type="submit" class="btn-primary small" id="deck-save">Add commander</button>
-      </div>
-    </form>
-  </dialog>
-
-  <!-- Confirm delete -->
-  <dialog id="confirm-dialog" class="sheet">
-    <form method="dialog">
-      <h3 id="confirm-title">Delete game?</h3>
-      <p id="confirm-text" class="muted"></p>
-      <div class="dialog-actions">
-        <button type="submit" class="btn-ghost" value="cancel">Keep it</button>
-        <button type="submit" class="btn-danger" value="ok">Delete</button>
       </div>
     </form>
   </dialog>

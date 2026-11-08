@@ -129,13 +129,12 @@ input[type="date"] { color-scheme: dark; }
 .win[aria-checked="true"] b::before { content: "🏆 "; }
 
 /* Buttons */
-.btn-primary, .btn-danger, .btn-ghost {
+.btn-primary, .btn-ghost {
   border: 0; border-radius: 13px; min-height: 52px; padding: 12px 18px; font-weight: 700; cursor: pointer;
 }
 .btn-primary { width: 100%; background: var(--gold); color: var(--gold-ink); font-size: 17px; }
 .btn-primary.small { width: auto; min-height: 46px; font-size: 15px; }
 .btn-primary:disabled { background: #3a3b45; color: #8b8da0; cursor: not-allowed; }
-.btn-danger { background: var(--red); color: #fff; }
 .btn-ghost { background: transparent; border: 1px solid var(--line); }
 .link-btn { background: none; border: 0; color: var(--gold-2); font-weight: 600; cursor: pointer; padding: 8px; }
 .link-btn.center { display: block; margin: 8px auto 0; }
@@ -162,8 +161,6 @@ input[type="date"] { color-scheme: dark; }
 .pod li span { color: var(--muted); }
 .pod li.won b { color: var(--gold-2); }
 .game-notes { margin-top: 6px; font-size: 13px; color: var(--muted); font-style: italic; }
-.game-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
-.game-actions .link-btn { color: #f3b0aa; font-size: 14px; }
 .empty { text-align: center; color: var(--muted); padding: 24px 8px; }
 
 /* Standings */

@@ -6,7 +6,8 @@
  * "Who has access: Anyone". The app talks to the /exec URL that gives you.
  *
  * The script runs as you, so the group doesn't need edit access to the sheet
- * to log games through the app.
+ * to log games through the app. Games can only be added here, never changed or
+ * deleted: fixing or deleting a game is done on the Games sheet itself.
  *
  * @OnlyCurrentDoc
  */
@@ -25,7 +26,6 @@ const CFG = {
 // Games columns B..M (2..13): Bracket, Player 1-4, Commander 1-4, Winner, Notes, Date
 const GAME_FIRST_COL = 2;
 const GAME_COLS = 12;
-const DATE_FORMULA_R1C1 = '=IF(COUNTA(RC2:RC12)=0,"",IF(N(RC)=0,TODAY(),RC))';
 
 // --------------------------------------------------------------------------- web entry points
 
@@ -49,7 +49,6 @@ function doPost(e) {
     switch (req.action) {
       case 'logGame': return withLock_(() => logGame_(req));
       case 'addDeck': return withLock_(() => addDeck_(req));
-      case 'deleteGame': return withLock_(() => deleteGame_(req));
       default: throw userError_('Unknown request.');
     }
   });
@@ -138,7 +137,6 @@ function recentGames_(ss) {
     const d = g.display;
     return {
       row: g.row,
-      key: rowKey_(g.values),
       number: d[0],
       bracket: d[1],
       players: d.slice(2, 6),
@@ -150,11 +148,6 @@ function recentGames_(ss) {
       status: d[14],
     };
   });
-}
-
-/** Identifies a game row by its typed-in cells, so a delete can't hit the wrong game. */
-function rowKey_(rowValues) {
-  return rowValues.slice(1, 12).map(v => String(v).trim()).join('|');
 }
 
 /** A table on the Dashboard: the title cell, a header row under it, rows until `keyHeader` is blank. */
@@ -268,31 +261,6 @@ function addDeck_(req) {
   remember_(req.clientId);
   const status = sheet.getRange(row, 11).getDisplayValue();
   return { row, commander, status };
-}
-
-function deleteGame_(req) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('Games');
-  const row = Number(req.row);
-  if (!(row >= CFG.firstRow && row <= CFG.gamesLastRow) || Math.floor(row) !== row) {
-    throw userError_("That game couldn't be found. Refresh and try again.");
-  }
-  const used = usedGameRows_(sheet);
-  const idx = used.findIndex(g => g.row === row);
-  if (idx < 0 || rowKey_(used[idx].values) !== String(req.key)) {
-    throw userError_('That game has changed since the app loaded it. Refresh and try again.');
-  }
-
-  // Move every game below it up one row, so the log stays in order with no gap.
-  const last = used[used.length - 1].row;
-  if (last > row) {
-    const below = sheet.getRange(row + 1, GAME_FIRST_COL, last - row, GAME_COLS).getValues();
-    sheet.getRange(row, GAME_FIRST_COL, last - row, GAME_COLS).setValues(below);
-  }
-  sheet.getRange(last, GAME_FIRST_COL, 1, GAME_COLS - 1).setValues([new Array(GAME_COLS - 1).fill('')]);
-  sheet.getRange(last, GAME_FIRST_COL + GAME_COLS - 1).setFormulaR1C1(DATE_FORMULA_R1C1);
-  SpreadsheetApp.flush();
-  return { deleted: true, row };
 }
 
 // --------------------------------------------------------------------------- helpers
