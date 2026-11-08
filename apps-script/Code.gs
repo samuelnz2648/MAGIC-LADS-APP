@@ -26,6 +26,8 @@ const CFG = {
 // Games columns B..M (2..13): Bracket, Player 1-4, Commander 1-4, Winner, Notes, Date
 const GAME_FIRST_COL = 2;
 const GAME_COLS = 12;
+const DATE_FORMULA_R1C1 = '=IF(COUNTA(RC2:RC12)=0,"",IF(N(RC)=0,TODAY(),RC))';
+const DECK_OPTION_WIDTH = 60;   // DeckOptions: one 60-column block per seat
 
 // --------------------------------------------------------------------------- web entry points
 
@@ -218,13 +220,48 @@ function logGame_(req) {
   const row = used.length ? used[used.length - 1].row + 1 : CFG.firstRow;
   if (row > CFG.gamesLastRow) throw userError_('The Games sheet is full (2000 games). Extend it before logging more.');
 
-  sheet.getRange(row, GAME_FIRST_COL, 1, GAME_COLS)
-    .setValues([[bracket].concat(who, cmds, [winner, notes, serial])]);
-  SpreadsheetApp.flush();
+  writeGameRow_(ss, sheet, row, bracket, who, cmds, winner, notes, serial);
   remember_(req.clientId);
 
   const after = sheet.getRange(row, 1, 1, 15).getDisplayValues()[0];
   return { row, number: after[0], date: after[12], winningCommander: after[13], status: after[14] };
+}
+
+/**
+ * Fills a Games row the way a person would. The sheet's dropdowns check each cell as it is
+ * written: a commander must be on that seat's list (worked out from the bracket and player),
+ * and the winner must be one of the players. So the bracket and players go in first, then the
+ * commanders once their lists have caught up, then the winner, notes and date.
+ * If the sheet refuses any of it, the row is cleared so no half-written game is left behind.
+ */
+function writeGameRow_(ss, sheet, row, bracket, who, cmds, winner, notes, serial) {
+  try {
+    sheet.getRange(row, GAME_FIRST_COL, 1, 5).setValues([[bracket].concat(who)]);          // B:F
+    SpreadsheetApp.flush();
+    waitForDeckLists_(ss, row, cmds);
+    sheet.getRange(row, GAME_FIRST_COL + 5, 1, 4).setValues([cmds]);                       // G:J
+    sheet.getRange(row, GAME_FIRST_COL + 9, 1, 3).setValues([[winner, notes, serial]]);    // K:M
+    SpreadsheetApp.flush();
+  } catch (err) {
+    sheet.getRange(row, GAME_FIRST_COL, 1, GAME_COLS - 1).clearContent();                  // B:L
+    sheet.getRange(row, GAME_FIRST_COL + GAME_COLS - 1).setFormulaR1C1(DATE_FORMULA_R1C1);  // M
+    SpreadsheetApp.flush();
+    throw userError_("The sheet wouldn't accept that game, so nothing was saved (" +
+      (err.userMessage || err.message) + ').');
+  }
+}
+
+/** Waits until each seat's commander list on DeckOptions includes the commander being logged. */
+function waitForDeckLists_(ss, row, cmds) {
+  const opts = ss.getSheetByName('DeckOptions');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const line = opts.getRange(row, 1, 1, DECK_OPTION_WIDTH * 4).getDisplayValues()[0];
+    const ready = cmds.every((c, i) => line.slice(i * DECK_OPTION_WIDTH, (i + 1) * DECK_OPTION_WIDTH).indexOf(c) >= 0);
+    if (ready) return;
+    Utilities.sleep(700);
+    SpreadsheetApp.flush();
+  }
+  throw userError_("the commander lists for this game didn't update in time");
 }
 
 function addDeck_(req) {
