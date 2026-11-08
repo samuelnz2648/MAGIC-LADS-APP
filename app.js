@@ -576,7 +576,10 @@ function setup() {
   window.addEventListener('online', () => { online = true; flushOutbox().then(() => refresh({ quiet: true })); });
   window.addEventListener('offline', () => { online = false; renderAll(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') flushOutbox().then(() => refresh({ quiet: true }));
+    if (document.visibilityState !== 'visible') return;
+    flushOutbox().then(() => refresh({ quiet: true }));
+    // Phones often resume the app instead of reopening it, so check for a new version here too.
+    if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
   });
   setInterval(() => { if (outbox.some(i => !i.error)) flushOutbox(); }, 60000);
 
@@ -585,7 +588,18 @@ function setup() {
   renderAll();
   if (API_READY) flushOutbox().then(() => refresh({ quiet: true }));
 
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    // When a new version of the app has just been saved to the phone, switch to it straight away.
+    // The form and any waiting games are stored on the phone, so reloading loses nothing.
+    const hadOldVersion = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadOldVersion || reloading || document.querySelector('dialog[open]')) return;
+      reloading = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
 }
 
 setup();
