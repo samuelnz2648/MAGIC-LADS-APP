@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Magic Lads</title>
+  <meta name="description" content="Log Magic Lads commander games to the group tracker.">
+  <meta name="theme-color" content="#161a2e">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Magic Lads">
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="" width="30" height="30">
+      <span>Magic Lads</span>
+    </div>
+    <button id="install" class="pill" type="button" hidden>Install</button>
+    <button id="refresh" class="icon-btn" type="button" aria-label="Refresh">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </header>
+
+  <div id="status" class="status" hidden></div>
+  <div id="ios-hint" class="hint-banner" hidden>
+    <span>Install: tap <b>Share</b> then <b>Add to Home Screen</b>.</span>
+    <button type="button" class="link-btn" data-dismiss="ios-hint">Got it</button>
+  </div>
+  <div id="outbox" class="outbox" hidden></div>
+
+  <main>
+    <!-- Log a game -->
+    <section id="view-log" class="view" aria-label="Log a game">
+      <form id="game-form" novalidate autocomplete="off">
+        <div class="card">
+          <div class="row-2">
+            <div class="field">
+              <span class="label">Bracket</span>
+              <div id="brackets" class="chips" role="radiogroup" aria-label="Bracket"></div>
+            </div>
+            <label class="field">
+              <span class="label">Date</span>
+              <input id="date" type="date" required>
+            </label>
+          </div>
+        </div>
+
+        <div id="seats" class="seats"></div>
+
+        <div class="card">
+          <span class="label">Winner</span>
+          <div id="winners" class="winners" role="radiogroup" aria-label="Winner">
+            <p class="muted small">Pick the players first.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <label class="field">
+            <span class="label">Notes <span class="muted">(optional)</span></span>
+            <input id="notes" type="text" maxlength="300" placeholder="e.g. turn 4 win, combo">
+          </label>
+        </div>
+
+        <p id="form-hint" class="form-hint" aria-live="polite"></p>
+        <button id="submit" class="btn-primary" type="submit" disabled>Log game</button>
+        <button id="clear" class="link-btn center" type="button">Start a new pod</button>
+      </form>
+    </section>
+
+    <!-- Recent games -->
+    <section id="view-recent" class="view" aria-label="Recent games" hidden>
+      <h2 class="view-title">Recent games</h2>
+      <div id="recent-list" class="list"></div>
+    </section>
+
+    <!-- Standings -->
+    <section id="view-standings" class="view" aria-label="Standings" hidden>
+      <h2 class="view-title">Leaderboard</h2>
+      <p id="lb-note" class="muted small"></p>
+      <div class="card flush">
+        <table class="table" id="lb-table">
+          <thead><tr><th>#</th><th>Player</th><th class="num">W/G</th><th class="num">Win</th><th class="num">Adj.</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <h2 class="view-title">Top decks</h2>
+      <p id="td-note" class="muted small"></p>
+      <div id="td-list" class="list"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button type="button" class="tab active" data-view="log">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+      <span>Log game</span>
+    </button>
+    <button type="button" class="tab" data-view="recent">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Recent</span>
+    </button>
+    <button type="button" class="tab" data-view="standings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Standings</span>
+    </button>
+  </nav>
+
+  <!-- Add a commander -->
+  <dialog id="deck-dialog" class="sheet">
+    <form id="deck-form" method="dialog" novalidate autocomplete="off">
+      <h3>New commander</h3>
+      <p class="muted small">Adds it to the Decks sheet so it can be picked in games.</p>
+      <label class="field">
+        <span class="label">Player</span>
+        <select id="deck-player" required></select>
+      </label>
+      <label class="field">
+        <span class="label">Bracket</span>
+        <select id="deck-bracket" required></select>
+      </label>
+      <label class="field">
+        <span class="label">Commander</span>
+        <input id="deck-name" type="text" maxlength="150" list="card-suggestions" placeholder="Start typing a card name" autocapitalize="words" required>
+        <datalist id="card-suggestions"></datalist>
+      </label>
+      <p id="deck-error" class="error small" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn-ghost" value="cancel" id="deck-cancel">Cancel</button>
+        <button type="submit" class="btn-primary small" id="deck-save">Add commander</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Confirm delete -->
+  <dialog id="confirm-dialog" class="sheet">
+    <form method="dialog">
+      <h3 id="confirm-title">Delete game?</h3>
+      <p id="confirm-text" class="muted"></p>
+      <div class="dialog-actions">
+        <button type="submit" class="btn-ghost" value="cancel">Keep it</button>
+        <button type="submit" class="btn-danger" value="ok">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
