@@ -945,7 +945,8 @@ function renderPlayer() {
   const lb = data && data.leaderboard;
   const rows = (lb && lb.rows) || [];
   const ranked = rows.filter(r => Number(r.Games) > 0);
-  if (!players.includes(pickedPlayer)) pickedPlayer = (ranked[0] && ranked[0].Player) || players[0] || '';
+  // Until the players have loaded, keep the saved choice rather than replacing it.
+  if (players.length && !players.includes(pickedPlayer)) pickedPlayer = (ranked[0] && ranked[0].Player) || players[0] || '';
 
   const sel = $('#player-select');
   sel.replaceChildren(...(players.length ? players.map(p => h('option', { value: p, selected: p === pickedPlayer, text: p }))
@@ -953,7 +954,7 @@ function renderPlayer() {
   sel.disabled = !players.length;
 
   const body = $('#player-body');
-  const name = pickedPlayer;
+  const name = players.length ? pickedPlayer : '';
   if (!name) { body.replaceChildren(); $('#player-rank').textContent = ''; $('#player-place').textContent = ''; setWash(null); return; }
 
   // Leaderboard: place, adjusted win %, record.
