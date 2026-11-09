@@ -28,11 +28,13 @@ const DECKS_RANGE = 'K_Player';  // Decks!B5:B504
 const PLAYERS_RANGE = 'P_Name';  // Players!B5:B34
 
 // Games columns: A #, B Bracket, C-F Player 1-4, G-J Commander 1-4, K Winner, L Notes,
-// M Date, N Winning Commander, O Status. The app writes B..M.
-const GAME_FIRST_COL = 2;    // B
-const GAME_COLS = 12;        // B..M
-const GAMES_WIDTH = 15;      // A..O
+// M Date, N Winning Commander, O Status. A game is what's typed in B..L; the app also writes M.
+const BRACKET_COL = 2;       // B
+const NOTES_COL = 12;        // L
 const DATE_COL = 13;         // M
+const GAME_COLS = NOTES_COL - BRACKET_COL + 1;   // B..L
+const GAMES_WIDTH = 15;      // A..O
+// The Date cell's formula: today's date once B..L has something in it, kept from then on.
 const DATE_FORMULA_R1C1 = '=IF(COUNTA(RC2:RC12)=0,"",IF(N(RC)=0,TODAY(),RC))';
 const DECK_OPTION_WIDTH = 60;   // DeckOptions: one 60-column block per seat
 
@@ -44,7 +46,7 @@ function doGet(e) {
   return respond_(() => {
     const action = (e && e.parameter && e.parameter.action) || 'data';
     if (action === 'data') return getData_();
-    if (action === 'games') return { games: allGames_(SpreadsheetApp.getActiveSpreadsheet()) };
+    if (action === 'games') return { games: games_(SpreadsheetApp.getActiveSpreadsheet()) };
     throw userError_('Unknown request.');
   });
 }
@@ -104,18 +106,29 @@ function withLock_(fn) {
 function onEdit(e) {
   const range = e && e.range;
   if (!range || range.getSheet().getName() !== 'Games') return;
-  if (range.getColumn() > 12 || range.getLastColumn() < 2) return;   // only edits in B..L
+  if (range.getColumn() > NOTES_COL || range.getLastColumn() < BRACKET_COL) return;   // only edits in B..L
   const g = gameRows_(e.source);
   const top = Math.max(range.getRow(), g.first);
   const bottom = Math.min(range.getLastRow(), g.first + g.count - 1);
   if (top > bottom) return;
   const n = bottom - top + 1;
-  const values = g.sheet.getRange(top, 2, n, 11).getValues();             // B..L
-  const formulas = g.sheet.getRange(top, DATE_COL, n, 1).getFormulas();   // M
-  for (let i = 0; i < n; i++) {
-    if (formulas[i][0] || values[i].some(v => v !== '')) continue;
-    g.sheet.getRange(top + i, DATE_COL).setFormulaR1C1(DATE_FORMULA_R1C1);
+  const values = g.sheet.getRange(top, BRACKET_COL, n, GAME_COLS).getValues();   // B..L
+  const formulas = g.sheet.getRange(top, DATE_COL, n, 1).getFormulas();          // M
+  // Rows next to each other get their formula back in one write (clearing many games at once).
+  let start = -1;
+  for (let i = 0; i <= n; i++) {
+    const emptied = i < n && !formulas[i][0] && values[i].every(v => v === '');
+    if (emptied && start < 0) start = i;
+    if (!emptied && start >= 0) {
+      resetDates_(g.sheet, top + start, i - start);
+      start = -1;
+    }
   }
+}
+
+/** Puts the auto-date formula back in the Date cells of `count` Games rows from `row`. */
+function resetDates_(sheet, row, count) {
+  sheet.getRange(row, DATE_COL, count, 1).setFormulaR1C1(DATE_FORMULA_R1C1);
 }
 
 // --------------------------------------------------------------------------- reading
@@ -130,7 +143,7 @@ function getData_() {
     deckBrackets: brackets.deck,
     players: players_(ss),
     decks: okDecks_(ss),
-    recent: recentGames_(ss),
+    recent: games_(ss, CFG.recentCount),
     leaderboard: dashTable_(grid, 'Leaderboard', 'Player'),
     topDecks: dashTable_(grid, 'Top Decks', 'Commander'),
   };
@@ -177,7 +190,7 @@ function okDecks_(ss) {
 
 /** Row numbers of the Games rows with anything in Bracket..Notes (B..L), top to bottom. */
 function usedGameRows_(g) {
-  const values = g.sheet.getRange(g.first, 2, g.count, 11).getValues();
+  const values = g.sheet.getRange(g.first, BRACKET_COL, g.count, GAME_COLS).getValues();
   const used = [];
   values.forEach((r, i) => {
     if (r.some(v => v !== '')) used.push(g.first + i);
@@ -185,15 +198,12 @@ function usedGameRows_(g) {
   return used;
 }
 
-function recentGames_(ss) {
+/** The games on the Games sheet, newest first: the last `limit` of them (Recent), or every one
+ *  (the app's Player tab works out each player's stats from these). */
+function games_(ss, limit) {
   const g = gameRows_(ss);
-  return gamesAt_(g, usedGameRows_(g).slice(-CFG.recentCount));
-}
-
-/** Every game on the Games sheet, newest first: the app's Player tab works out each player's stats from these. */
-function allGames_(ss) {
-  const g = gameRows_(ss);
-  return gamesAt_(g, usedGameRows_(g));
+  const used = usedGameRows_(g);
+  return gamesAt_(g, limit ? used.slice(-limit) : used);
 }
 
 /** The games in these Games rows (top to bottom), newest first, as the sheet displays them. */
@@ -235,8 +245,9 @@ function dashTable_(grid, title, keyHeader) {
   grid[r0 + 1].forEach((h, c) => { if (h.trim()) cols.push([c, h.trim()]); });
   const keyCol = (cols.find(([, h]) => h === keyHeader) || [])[0];
   const rows = [];
+  if (keyCol === undefined) return { note, rows };
   for (let r = r0 + 2; r < grid.length; r++) {
-    if (keyCol === undefined || !grid[r][keyCol].trim()) break;
+    if (!grid[r][keyCol].trim()) break;
     const row = {};
     cols.forEach(([c, h]) => { row[h] = grid[r][c].trim(); });
     rows.push(row);
@@ -276,8 +287,11 @@ function logGame_(req) {
     if (!ok) throw userError_(c + " isn't one of " + who[i] + "'s " + bracket + ' decks on the Decks sheet.');
   });
   if (who.indexOf(winner) < 0) throw userError_('Pick the winner.');
-  const notes = safeText_(clean_(g.notes).slice(0, 300));
-  const serial = dateSerial_(g.date, ss);
+  const game = {
+    bracket, players: who, commanders: cmds, winner,
+    notes: clean_(g.notes).slice(0, 300),
+    date: dateSerial_(g.date, ss),
+  };
 
   const rows = gameRows_(ss);
   const used = usedGameRows_(rows);
@@ -286,7 +300,7 @@ function logGame_(req) {
     throw userError_('The Games sheet is full (' + rows.count + ' games). Extend it before logging more.');
   }
 
-  writeGameRow_(ss, rows.sheet, row, bracket, who, cmds, winner, notes, serial);   // flushes, so the next request sees this row
+  writeGameRow_(ss, rows.sheet, row, game);   // flushes, so the next request sees this row
   remember_(req.clientId);
 
   const after = rows.sheet.getRange(row, 1, 1, GAMES_WIDTH).getDisplayValues()[0];
@@ -299,18 +313,20 @@ function logGame_(req) {
  * and the winner must be one of the players. So the bracket and players go in first, then the
  * commanders once their lists have caught up, then the winner, notes and date.
  * If the sheet refuses any of it, the row is cleared so no half-written game is left behind.
+ * Text goes through safeText_, so a name that starts like a formula is written as text.
  */
-function writeGameRow_(ss, sheet, row, bracket, who, cmds, winner, notes, serial) {
+function writeGameRow_(ss, sheet, row, game) {
+  const text = values => values.map(safeText_);
   try {
-    sheet.getRange(row, GAME_FIRST_COL, 1, 5).setValues([[bracket].concat(who)]);          // B:F
+    sheet.getRange(row, BRACKET_COL, 1, 5).setValues([text([game.bracket].concat(game.players))]);        // B:F
     SpreadsheetApp.flush();
-    waitForDeckLists_(ss, row, cmds);
-    sheet.getRange(row, GAME_FIRST_COL + 5, 1, 4).setValues([cmds]);                       // G:J
-    sheet.getRange(row, GAME_FIRST_COL + 9, 1, 3).setValues([[winner, notes, serial]]);    // K:M
+    waitForDeckLists_(ss, row, game.commanders);
+    sheet.getRange(row, BRACKET_COL + 5, 1, 4).setValues([text(game.commanders)]);                        // G:J
+    sheet.getRange(row, BRACKET_COL + 9, 1, 3).setValues([text([game.winner, game.notes]).concat(game.date)]);   // K:M
     SpreadsheetApp.flush();
   } catch (err) {
-    sheet.getRange(row, GAME_FIRST_COL, 1, GAME_COLS - 1).clearContent();                  // B:L
-    sheet.getRange(row, GAME_FIRST_COL + GAME_COLS - 1).setFormulaR1C1(DATE_FORMULA_R1C1);  // M
+    sheet.getRange(row, BRACKET_COL, 1, GAME_COLS).clearContent();   // B:L
+    resetDates_(sheet, row, 1);                                      // M
     SpreadsheetApp.flush();
     throw userError_("The sheet wouldn't accept that game, so nothing was saved (" +
       (err.userMessage || err.message) + ').');
@@ -336,15 +352,14 @@ function addDeck_(req) {
 
   const player = clean_(req.player);
   const bracket = clean_(req.bracket);
-  const commander = safeText_(clean_(req.commander).slice(0, 150));
-  const notes = safeText_(clean_(req.notes).slice(0, 200));
+  const commander = clean_(req.commander).slice(0, 150);
 
   if (players_(ss).indexOf(player) < 0) throw userError_('Pick a player.');
   if (bracketLists_(ss).deck.indexOf(bracket) < 0) throw userError_('Pick a bracket.');
   if (!commander) throw userError_("Type the commander's name.");
 
   const k = deckRows_(ss);
-  const rows = k.sheet.getRange(k.first, 2, k.count, 4).getDisplayValues();   // B..E
+  const rows = k.sheet.getRange(k.first, 2, k.count, 4).getDisplayValues();   // B..E: Player, Commander, Bracket, Notes
   let empty = -1;
   for (let i = 0; i < rows.length; i++) {
     const [p, c, b, note] = rows[i].map(v => v.trim());
@@ -355,7 +370,7 @@ function addDeck_(req) {
   }
   if (empty < 0) throw userError_('The Decks sheet is full. Make room before adding more.');
 
-  k.sheet.getRange(k.first + empty, 2, 1, 4).setValues([[player, commander, bracket, notes]]);
+  k.sheet.getRange(k.first + empty, 2, 1, 3).setValues([[player, commander, bracket].map(safeText_)]);   // B..D
   SpreadsheetApp.flush();
   remember_(req.clientId);
   return { commander };
@@ -372,15 +387,20 @@ function safeText_(s) {
   return /^[=+\-@]/.test(s) ? "'" + s : s;
 }
 
-/** The game's date as a sheet date number. Uses the app's date if sensible, else today. */
+/** The game's date as a sheet date number: the app's date if it's a real date and not in the future, else today. */
 function dateSerial_(text, ss) {
-  const todayText = today_(ss);
-  let ymd = /^\d{4}-\d{2}-\d{2}$/.test(String(text || '')) ? String(text) : todayText;
-  if (ymd > todayText) ymd = todayText;   // never in the future
-  const [y, m, d] = ymd.split('-').map(Number);
-  const utc = Date.UTC(y, m - 1, d);
-  if (isNaN(utc)) return dateSerial_(todayText, ss);
-  return utc / 86400000 + 25569;           // days since 1899-12-30
+  const today = today_(ss);
+  const ymd = utcOf_(text) !== null && text <= today ? text : today;
+  return utcOf_(ymd) / 86400000 + 25569;   // days since 1899-12-30
+}
+
+/** A "yyyy-MM-dd" date as milliseconds at midnight UTC, or null if it isn't a real date (2026-02-30). */
+function utcOf_(text) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(text));
+  if (!m) return null;
+  const [y, mo, d] = m.slice(1).map(Number);
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? t.getTime() : null;
 }
 
 // Each request ID is its own script property ("req:<id>" -> when it was saved). One
@@ -398,7 +418,6 @@ function remember_(id) {
     const props = PropertiesService.getScriptProperties();
     props.setProperty(ID_PREFIX + id, String(Date.now()));
     const all = props.getProperties();
-    if (all.requestIds !== undefined) props.deleteProperty('requestIds');   // the old single-list format
     const ids = Object.keys(all).filter(key => key.indexOf(ID_PREFIX) === 0);
     if (ids.length > CFG.rememberIds) {
       ids.sort((a, b) => Number(all[a]) - Number(all[b]))
