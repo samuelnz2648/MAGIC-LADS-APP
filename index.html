@@ -40,33 +40,30 @@
     <!-- Log a game -->
     <section id="view-log" class="view" aria-label="Log a game">
       <form id="game-form" novalidate autocomplete="off">
+        <!-- Each part of the form is a numbered step with its own heading, so they read as separate sections. -->
+        <h2 class="step"><span class="step-no">1</span>Bracket</h2>
         <div class="card">
-          <div class="row-2">
-            <div class="field">
-              <span class="label">Bracket</span>
-              <div id="brackets" class="chips" role="radiogroup" aria-label="Bracket"></div>
-            </div>
-            <label class="field">
-              <span class="label">Date</span>
-              <input id="date" type="date" required>
-            </label>
-          </div>
+          <div id="brackets" class="chips" role="radiogroup" aria-label="Bracket"></div>
         </div>
 
+        <h2 class="step"><span class="step-no">2</span>Date</h2>
+        <div class="card">
+          <input id="date" type="date" required aria-label="Date">
+        </div>
+
+        <h2 class="step"><span class="step-no">3</span>Players &amp; commanders</h2>
         <div id="seats" class="seats"></div>
 
+        <h2 class="step"><span class="step-no">4</span>Winner</h2>
         <div class="card">
-          <span class="label">Winner</span>
           <div id="winners" class="winners" role="radiogroup" aria-label="Winner">
             <p class="muted small">Pick the players first.</p>
           </div>
         </div>
 
+        <h2 class="step"><span class="step-no">5</span>Notes <span class="opt">(optional)</span></h2>
         <div class="card">
-          <label class="field">
-            <span class="label">Notes <span class="muted">(optional)</span></span>
-            <input id="notes" type="text" maxlength="300" placeholder="e.g. turn 4 win, combo">
-          </label>
+          <input id="notes" type="text" maxlength="300" placeholder="e.g. turn 4 win, combo" aria-label="Notes">
         </div>
 
         <p id="form-hint" class="form-hint" aria-live="polite"></p>

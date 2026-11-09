@@ -77,8 +77,6 @@ main { padding: 12px 16px 0; max-width: 560px; margin: 0 auto; }
 .label { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 6px; }
 .field { display: block; }
 .field + .field { margin-top: 12px; }
-.row-2 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
-.row-2 > .field + .field { margin-top: 0; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .error { color: #f3b0aa; }
@@ -103,6 +101,19 @@ input[type="date"] { color-scheme: dark; }
   border: 1px solid var(--line); background: var(--bg-2); cursor: pointer; font-weight: 600;
 }
 .chip[aria-checked="true"] { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
+
+/* Log game: each part of the form is a numbered step, its heading running into a gold rule */
+.step {
+  display: flex; align-items: center; gap: 10px; margin: 22px 2px 10px;
+  font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--gold-2);
+}
+.step:first-child { margin-top: 6px; }
+.step::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(201, 162, 77, 0.6), rgba(201, 162, 77, 0)); }
+.step-no {
+  flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--gold); color: var(--gold-ink); font-size: 13px; letter-spacing: 0;
+}
+.step .opt { color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
 
 /* Seats */
 .seats { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 12px; }
