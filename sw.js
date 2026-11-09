@@ -1,10 +1,10 @@
 // Keeps the app's own files on the phone so it opens without signal.
 // Bump VERSION whenever the app's files change, so phones pick up the update.
-const VERSION = 'magic-lads-v11';
-// Commander card images the app has stored (see app.js). Kept across versions so they're never fetched twice.
+const VERSION = 'magic-lads-v12';
+// Commander card images the app has stored (CARD_CACHE in app.js). Kept across versions so they're never fetched twice.
 const CARD_CACHE = 'magic-lads-cards';
 const SHELL = [
-  './', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
+  'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
 ];
 
@@ -30,17 +30,18 @@ self.addEventListener('fetch', event => {
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  const key = req.mode === 'navigate' ? 'index.html' : req;
-  const network = fetch(req, { cache: 'no-cache' }).then(res => {   // asks GitHub if the file changed
-    if (res.ok && res.type === 'basic') {
-      const copy = res.clone();
-      caches.open(VERSION).then(cache => cache.put(key, copy));
-    }
-    return res;
-  });
-  event.respondWith(
-    caches.match(key, { ignoreSearch: true }).then(cached => cached || network)
-      .catch(() => caches.match('index.html')),
-  );
-  event.waitUntil(network.then(() => undefined, () => undefined));
+  // Every page of the app is index.html; files are kept by their address without any ?query.
+  const navigate = req.mode === 'navigate';
+  const key = navigate ? 'index.html' : url.pathname;
+  const network = fetch(req, { cache: 'no-cache' });   // asks GitHub if the file changed
+  // Registered first, so the copy is taken before the page starts reading the answer.
+  event.waitUntil(network.then(res => {
+    if (!res.ok || res.type !== 'basic') return undefined;
+    const copy = res.clone();
+    return caches.open(VERSION).then(cache => cache.put(key, copy));
+  }).catch(() => {}));
+  event.respondWith(caches.open(VERSION)
+    .then(cache => cache.match(key))
+    .then(cached => cached || network)
+    .catch(() => (navigate ? caches.match('index.html') : Response.error())));
 });
