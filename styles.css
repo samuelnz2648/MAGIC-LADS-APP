@@ -39,9 +39,8 @@ button, input, select { font: inherit; color: inherit; }
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
 }
-.brand { grid-column: 2; display: flex; align-items: center; gap: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
+.brand { grid-column: 2; display: block; width: auto; height: 44px; }
 .topbar-actions { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 10px; }
-.brand img { border-radius: 8px; }
 .icon-btn {
   width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line);
   background: var(--card); display: grid; place-items: center; cursor: pointer;

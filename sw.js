@@ -1,10 +1,10 @@
 // Keeps the app's own files on the phone so it opens without signal.
 // Bump VERSION whenever the app's files change, so phones pick up the update.
-const VERSION = 'magic-lads-v13';
+const VERSION = 'magic-lads-v14';
 // Commander card images the app has stored (CARD_CACHE in app.js). Kept across versions so they're never fetched twice.
 const CARD_CACHE = 'magic-lads-cards';
 const SHELL = [
-  'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
+  'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/wordmark.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
 ];
 
