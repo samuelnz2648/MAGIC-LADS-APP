@@ -267,6 +267,7 @@ body[data-view="player"] #mana-wash.on { opacity: 1; }
 .mana-row b { display: block; line-height: 1.2; }
 .mana-row small, .player-nemesis small { color: var(--muted); font-size: 12px; display: block; }
 .nemesis-name { display: block; font-size: 20px; line-height: 1.2; margin-bottom: 2px; }
+.colour-note { display: block; margin-top: 8px; color: var(--muted); font-size: 12px; font-style: italic; }
 .player-nemesis small.muted { margin-top: 4px; }
 .presults { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .presults li { display: flex; gap: 10px; align-items: flex-start; }
