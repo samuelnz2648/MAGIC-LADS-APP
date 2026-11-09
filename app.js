@@ -9,7 +9,7 @@
 
 const API = String(window.MAGIC_LADS_API || '').trim();
 const API_READY = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(API) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(API);
-const STORE = { data: 'ml.data.v1', outbox: 'ml.outbox.v1', draft: 'ml.draft.v1', hint: 'ml.ioshint.v1' };
+const STORE = { data: 'ml.data.v1', outbox: 'ml.outbox.v1', draft: 'ml.draft.v1', hint: 'ml.ioshint.v1', cards: 'ml.cards.v1' };
 const NEW_DECK = '__new__';
 const SEATS = 4;
 const STALE_MS = 30000;   // lists older than this are reloaded when you come back to the app
@@ -311,7 +311,8 @@ function renderForm() {
 
     return h('div', { class: 'card seat' },
       h('div', { class: 'seat-head' }, h('span', { class: 'seat-no', text: String(i + 1) }), playerSel),
-      cmdSel);
+      cmdSel,
+      cardArt(player ? draft.commanders[i] : '', `seat:${i}`, 'seat-art'));
   }));
 
   const winners = $('#winners');
@@ -467,11 +468,259 @@ async function saveDeck(ev) {
   }
 }
 
+// --------------------------------------------------------------------------- commander card images
+//
+// Each commander is looked up on Scryfall once. Which card it is (and its image address) is kept
+// in localStorage, and the image itself in the phone's Cache Storage, so from then on it shows
+// straight from the phone, without signal too, and Scryfall is never asked for it again.
+
+const CARD_CACHE = 'magic-lads-cards';    // sw.js keeps this cache when the app updates
+const SCRYFALL = 'https://api.scryfall.com';
+const SCRYFALL_GAP_MS = 550;              // Scryfall allows 2 card lookups a second
+const SCRYFALL_BATCH = 75;                // names per /cards/collection request (Scryfall's maximum)
+const RETRY_FAILED_MS = 60000;            // after a failed lookup (no signal, Scryfall down), wait before asking again
+const RECHECK_MISS_MS = 7 * 86400000;     // a name Scryfall didn't know is asked about again after a week
+const RECHECK_LOWRES_MS = 3 * 86400000;   // a card with only a preview scan (new sets) is checked for a proper one
+
+let cardInfo = load(STORE.cards, {});     // commander name (lower case) -> { cards: [{name, img}], at, lowres? } or { miss: true, at }
+const cardLookups = new Map();            // name -> Promise, while it's being looked up
+const lookupFailed = new Map();           // name -> when its last lookup failed
+const imageUrls = new Map();              // image address -> blob: URL of the copy stored on the phone
+const imageLoads = new Map();             // image address -> Promise, while it's being fetched or read
+const artSlots = new Map();               // where an image is shown -> its element, reused so re-drawing doesn't flicker
+
+function cardKey(name) { return String(name || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+
+function recheckDue(entry) {
+  const age = Date.now() - (entry.at || 0);
+  return entry.miss ? age > RECHECK_MISS_MS : !!entry.lowres && age > RECHECK_LOWRES_MS;
+}
+
+/** One request to Scryfall's API (a POST when `body` is given), queued so they're spaced out.
+ *  Resolves to null when Scryfall has no match. */
+let scryfallQueue = Promise.resolve();
+let scryfallNext = 0;
+function scryfall(path, body) {
+  const run = scryfallQueue.then(async () => {
+    const wait = scryfallNext - Date.now();
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    scryfallNext = Date.now() + SCRYFALL_GAP_MS;
+    const res = await fetch(SCRYFALL + path, body
+      ? { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : { headers: { Accept: 'application/json' } });
+    if (res.status === 404) return null;
+    if (res.status === 429) scryfallNext = Date.now() + 10000;   // told to slow down: back off for a while
+    if (!res.ok) throw new Error(`Scryfall said ${res.status}`);
+    return res.json();
+  });
+  scryfallQueue = run.catch(() => {});
+  return run;
+}
+
+/** Finds a card by its exact name. Names asked for together (a screenful of commanders) go to
+ *  Scryfall as one request. Resolves to the card, or null if no card has that name. */
+let collectWaiting = new Map();   // lower-case name -> { name, done: [resolve], fail: [reject] }
+let collectTimer = null;
+function cardByName(name) {
+  return new Promise((resolve, reject) => {
+    const key = name.toLowerCase();
+    if (!collectWaiting.has(key)) collectWaiting.set(key, { name, done: [], fail: [] });
+    collectWaiting.get(key).done.push(resolve);
+    collectWaiting.get(key).fail.push(reject);
+    if (!collectTimer) collectTimer = setTimeout(sendCollect, 40);
+  });
+}
+function sendCollect() {
+  collectTimer = null;
+  const all = Array.from(collectWaiting.values());
+  collectWaiting = new Map();
+  for (let i = 0; i < all.length; i += SCRYFALL_BATCH) {
+    const chunk = all.slice(i, i + SCRYFALL_BATCH);
+    scryfall('/cards/collection', { identifiers: chunk.map(w => ({ name: w.name })) }).then(json => {
+      const found = (json && json.data) || [];
+      for (const w of chunk) {
+        const card = found.find(c => cardNames(c).includes(w.name.toLowerCase())) || null;
+        w.done.forEach(f => f(card));
+      }
+    }, err => chunk.forEach(w => w.fail.forEach(f => f(err))));
+  }
+}
+/** Every name a card answers to: "A // B", each face, and any printed or flavor name. */
+function cardNames(card) {
+  return [card.name, card.printed_name, card.flavor_name].concat((card.card_faces || []).map(f => f.name))
+    .filter(Boolean).map(n => n.toLowerCase());
+}
+
+/** The ways to find a commander on Scryfall, best first. Each way is a list of names that must all
+ *  find a card: one for most commanders, two for partners and backgrounds ("Alena… // Gilanra…"). */
+function lookupPlans(name) {
+  const paren = name.match(/^(.+?)\s*\(([^()]+)\)\s*$/);   // "Chun-Li, Countless Kicks (Zethi, Arcane Blademaster)"
+  if (paren) return lookupPlans(paren[1]).concat(lookupPlans(paren[2]));
+  if (!name.includes('//')) return [[name]];
+  const parts = name.split('//').map(s => s.trim()).filter(Boolean);
+  return [
+    [name],               // a double-faced card: "Bruce Banner // The Incredible Hulk"
+    parts.slice(0, 2),    // two cards: "Merry, Warden of Isengard // Pippin, Warden of Isengard"
+  ];
+}
+
+/** A card's image (the front face for double-faced cards). */
+function cardFace(card) {
+  const faces = card.card_faces || [];
+  const uris = card.image_uris || (faces[0] && faces[0].image_uris);
+  if (!uris || !uris.normal) return null;
+  return { name: card.name, img: uris.normal, lowres: card.image_status !== 'highres_scan' };
+}
+
+/** First by exact name (batched with the other commanders on screen), then with Scryfall's forgiving
+ *  search, which copes with typos and other names for a card but answers one name at a time. */
+async function findCards(name) {
+  const plans = lookupPlans(name);
+  const fuzzy = part => scryfall(`/cards/named?fuzzy=${encodeURIComponent(part)}`);
+  for (const find of [cardByName, fuzzy]) {
+    for (const plan of plans) {
+      const found = (await Promise.all(plan.map(find))).map(c => c && cardFace(c));
+      // Both halves of "A // B" can find the same double-faced card: show it once.
+      const cards = found.filter((c, i) => !c || found.findIndex(d => d && d.img === c.img) === i);
+      if (found.every(Boolean)) {
+        return { cards: cards.map(c => ({ name: c.name, img: c.img })), lowres: cards.some(c => c.lowres) || undefined, at: Date.now() };
+      }
+    }
+  }
+  return { miss: true, at: Date.now() };
+}
+
+/** Looks a commander up on Scryfall and saves the answer. Resolves to what's known if it can't. */
+function lookupCommander(name) {
+  const key = cardKey(name);
+  const known = cardInfo[key] || null;
+  if (cardLookups.has(key)) return cardLookups.get(key);
+  if (!navigator.onLine || Date.now() - (lookupFailed.get(key) || 0) < RETRY_FAILED_MS) return Promise.resolve(known);
+  const run = findCards(name.replace(/\s+/g, ' ').trim())
+    .then(entry => {
+      cardInfo[key] = entry;
+      save(STORE.cards, cardInfo);
+      return entry;
+    }, () => { lookupFailed.set(key, Date.now()); return known; })
+    .finally(() => cardLookups.delete(key));
+  cardLookups.set(key, run);
+  return run;
+}
+
+/** The phone's copy of a card image, as a URL an <img> can show. Fetched from Scryfall and stored the first time. */
+function storedImage(url) {
+  if (imageUrls.has(url)) return Promise.resolve(imageUrls.get(url));
+  if (imageLoads.has(url)) return imageLoads.get(url);
+  const run = (async () => {
+    let cache = null;
+    try { if (window.caches) cache = await caches.open(CARD_CACHE); } catch (e) { /* storage blocked: just show it */ }
+    let res = cache ? await cache.match(url) : null;
+    if (!res) {
+      res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) throw new Error(`Image ${res.status}`);
+      if (cache) await cache.put(url, res.clone()).catch(() => {});
+    }
+    return URL.createObjectURL(await res.blob());
+  })()
+    .then(src => { imageUrls.set(url, src); return src; },
+      () => url)   // couldn't fetch or store it: let the browser try the address itself (tried again next time)
+    .finally(() => imageLoads.delete(url));
+  imageLoads.set(url, run);
+  return run;
+}
+
+/** The card image box for a commander. `slot` names where it's shown, so re-drawing reuses the same box. */
+function cardArt(name, slot, cls) {
+  const key = cardKey(name);
+  const old = artSlots.get(slot);
+  if (old && old.dataset.card === key) { updateArt(old, name); return old; }
+  const box = h('button', { type: 'button', class: `card-art ${cls || ''}` });
+  box.dataset.card = key;
+  artSlots.set(slot, box);
+  const known = key ? cardInfo[key] : null;
+  fillArt(box, known);
+  if (key && !known) box.classList.add('loading');
+  updateArt(box, name);
+  return box;
+}
+
+/** Looks the commander up if it hasn't been (or is due a re-check), and re-shows an image that failed to load. */
+function updateArt(box, name) {
+  const key = cardKey(name);
+  if (!key) return;
+  const known = cardInfo[key];
+  if (known && !recheckDue(known)) {
+    if (box._entry !== known || box._broken) fillArt(box, known);
+    return;
+  }
+  lookupCommander(name).then(entry => {
+    if (!box.isConnected || box.dataset.card !== key) return;
+    if (entry && (entry !== box._entry || box._broken)) fillArt(box, entry);
+    else if (!entry) box.classList.remove('loading');
+  });
+}
+
+function fillArt(box, entry) {
+  box._entry = entry;
+  box._broken = false;
+  const cards = entry && entry.cards;
+  box.classList.toggle('missing', !!(entry && entry.miss));
+  box.classList.toggle('pair', !!cards && cards.length > 1);
+  box.classList.toggle('has-card', !!cards);
+  box.disabled = !cards;
+  if (!cards) {
+    box.classList.remove('loading');
+    box.replaceChildren();
+    box.setAttribute('aria-hidden', 'true');
+    box.tabIndex = -1;
+    if (entry && entry.miss) box.title = 'No card image found on Scryfall'; else box.removeAttribute('title');
+    return;
+  }
+  box.removeAttribute('aria-hidden');
+  box.removeAttribute('tabindex');
+  box.removeAttribute('title');
+  box.setAttribute('aria-label', `Show ${cards.map(c => c.name).join(' and ')}`);
+  box.onclick = () => openCardView(cards);
+
+  const settle = () => { if (!box.querySelector('img:not(.shown)')) box.classList.remove('loading'); };
+  box.replaceChildren(...cards.map(c => {
+    const ready = imageUrls.get(c.img);
+    const img = h('img', { alt: '', draggable: 'false', class: ready ? 'shown' : '' });
+    img.addEventListener('load', () => { img.classList.add('shown'); settle(); });
+    img.addEventListener('error', () => { box._broken = true; img.remove(); settle(); });
+    if (ready) img.src = ready;
+    else storedImage(c.img).then(src => { img.src = src; });
+    return img;
+  }));
+  box.classList.toggle('loading', !!box.querySelector('img:not(.shown)'));
+}
+
+/** Shows a commander's card(s) big. Tap anywhere to close. */
+function openCardView(cards) {
+  const wrap = $('#card-view-imgs');
+  wrap.classList.toggle('pair', cards.length > 1);
+  wrap.replaceChildren(...cards.map(c => {
+    const img = h('img', { alt: c.name });
+    storedImage(c.img).then(src => { img.src = src; });
+    return img;
+  }));
+  $('#card-dialog').showModal();
+}
+
 // --------------------------------------------------------------------------- recent games
 
 function podList(players, commanders, winner) {
   return h('ul', { class: 'pod' }, players.map((p, i) =>
     h('li', { class: p === winner ? 'won' : '' }, h('b', { text: p }), h('span', { text: commanders[i] || '' }))));
+}
+
+/** A game's winner and pod, with the winning commander's card beside them. */
+function gameBody(slot, winner, winningCommander, players, commanders) {
+  return h('div', { class: 'game-body' },
+    h('div', { class: 'game-main' },
+      winner ? h('div', { class: 'game-winner' }, `🏆 ${winner}`, h('small', { text: winningCommander })) : null,
+      podList(players, commanders, winner)),
+    winner && winningCommander ? cardArt(winningCommander, slot, 'game-art') : null);
 }
 
 function renderRecent() {
@@ -485,20 +734,19 @@ function renderRecent() {
         h('span', { class: 'no', text: 'New' }),
         h('span', { class: 'meta', text: `${niceDate(g.date)} · ${g.bracket}` }),
         h('span', { class: `badge ${item.error ? 'bad' : 'wait'}`, text: item.error ? 'Not sent' : 'Waiting to send' })),
-      h('div', { class: 'game-winner' }, `🏆 ${g.winner}`, h('small', { text: g.commanders[g.players.indexOf(g.winner)] })),
-      podList(g.players, g.commanders, g.winner),
+      gameBody('p:' + item.id, g.winner, g.commanders[g.players.indexOf(g.winner)], g.players, g.commanders),
       g.notes ? h('div', { class: 'game-notes', text: g.notes }) : null,
       item.error ? h('div', { class: 'game-notes error', text: item.error }) : null));
   }
 
   for (const g of (data && data.recent) || []) {
-    items.push(h('article', { class: 'game', 'data-key': ['g', g.number, g.date, g.winner].concat(g.players).join('|') },
+    const key = ['g', g.number, g.date, g.winner].concat(g.players).join('|');
+    items.push(h('article', { class: 'game', 'data-key': key },
       h('div', { class: 'game-top' },
         h('span', { class: 'no', text: g.number ? `#${g.number}` : '—' }),
         h('span', { class: 'meta', text: [niceDate(g.date), g.bracket].filter(Boolean).join(' · ') }),
         h('span', { class: `badge ${g.status === 'OK' ? 'ok' : 'bad'}`, text: g.status || 'Incomplete' })),
-      g.winner ? h('div', { class: 'game-winner' }, `🏆 ${g.winner}`, h('small', { text: g.winningCommander })) : null,
-      podList(g.players, g.commanders, g.winner),
+      gameBody(key, g.winner, g.winningCommander, g.players, g.commanders),
       g.notes ? h('div', { class: 'game-notes', text: g.notes }) : null));
   }
 
@@ -671,6 +919,7 @@ function setup() {
   });
   $('#deck-form').addEventListener('submit', saveDeck);
   $('#deck-cancel').addEventListener('click', () => $('#deck-dialog').close());
+  $('#card-dialog').addEventListener('click', () => $('#card-dialog').close());
   $('#deck-name').addEventListener('input', () => { clearTimeout(suggestTimer); suggestTimer = setTimeout(suggestCards, 250); });
   $('#install').addEventListener('click', async () => {
     if (!installPrompt) return;
