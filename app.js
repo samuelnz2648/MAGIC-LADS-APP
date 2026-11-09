@@ -904,15 +904,22 @@ function playerStats(name) {
   return { mine, colours, unknown: Array.from(unknown), nemesis };
 }
 
-/** Looks up the colours of commanders not looked up yet (one batched request), then re-draws. */
+/** Looks up the colours of commanders not looked up yet (one batched request), then re-draws.
+ *  Returns true while a lookup is running, so the colours aren't shown half counted. A name whose
+ *  lookup fails (no signal, Scryfall down) isn't waited on again for a minute. */
 let colourLookups = false;
+const colourTried = new Map();   // name -> when its lookup last came back without colours
 function lookUpColours(names) {
-  if (colourLookups || !names.length || !navigator.onLine) return;
+  const todo = names.filter(n => Date.now() - (colourTried.get(n) || 0) > RETRY_FAILED_MS);
+  if (!todo.length || !navigator.onLine) return false;
+  if (colourLookups) return true;
   colourLookups = true;
-  Promise.all(names.map(n => lookupCommander(n))).then(found => {
+  Promise.all(todo.map(n => lookupCommander(n))).then(found => {
+    found.forEach((e, i) => { if (!e || !(e.colors || e.miss)) colourTried.set(todo[i], Date.now()); });
     colourLookups = false;
-    if (found.some(e => e && (e.colors || e.miss))) renderPlayer();
+    renderPlayer();
   });
+  return true;
 }
 
 function manaSymbol(c) {
@@ -966,7 +973,7 @@ function renderPlayer() {
   $('#player-note').textContent = caption(lb);
 
   const st = playerStats(name);
-  if (st && currentView === 'player') lookUpColours(st.unknown);
+  const lookingUp = !!st && currentView === 'player' && lookUpColours(st.unknown);
   const fromGames = st ? null
     : games && games.unsupported ? "Update the tracker's Apps Script to see this (see the README)."
     : !navigator.onLine ? 'Connect once to load the games.' : 'Loading games…';
@@ -986,10 +993,12 @@ function renderPlayer() {
   // Most played colours, with mana symbols. The page takes on the top one.
   const colourCard = h('div', { class: 'card player-colours' }, h('span', { class: 'label', text: 'Most played colours' }),
     !st ? waiting(fromGames)
-      : st.colours.length ? st.colours.map(({ c, n }) => h('div', { class: 'mana-row' }, manaSymbol(c),
-        h('div', {}, h('b', { text: COLOURS[c] }), h('small', { text: `${n} of ${st.mine.length} games` }))))
-      : waiting(st.mine.length ? 'Looking up commanders…' : 'No games yet.'));
-  setWash(st && st.colours[0] ? st.colours[0].c : null);
+      : lookingUp ? waiting('Looking up commanders…')
+      : st.colours.length ? [...st.colours.map(({ c, n }) => h('div', { class: 'mana-row' }, manaSymbol(c),
+        h('div', {}, h('b', { text: COLOURS[c] }), h('small', { text: `${n} of ${st.mine.length} games` })))),
+        st.unknown.length ? h('small', { class: 'colour-note', text: `${st.unknown.length} commander${st.unknown.length === 1 ? '' : 's'} not looked up yet` }) : null]
+      : waiting(st.mine.length ? "Couldn't look up their commanders yet." : 'No games yet.'));
+  setWash(st && !lookingUp && st.colours[0] ? st.colours[0].c : null);
 
   const nem = st && st.nemesis;
   const nemesisCard = h('div', { class: 'card player-nemesis' }, h('span', { class: 'label', text: 'Nemesis' }),
