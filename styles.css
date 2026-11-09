@@ -220,6 +220,22 @@ dialog.card-view::backdrop { background: rgba(5, 7, 16, 0.85); }
 .deck .info small { color: var(--muted); }
 .deck .score { text-align: right; font-variant-numeric: tabular-nums; }
 .deck .score small { display: block; color: var(--muted); font-size: 12px; }
+.deck-art { width: 60px; flex: none; }
+
+/* Gold, silver and bronze for the top three players and decks, in the Player tab's colour-wash style.
+   The gradients run top to bottom, so a table row looks the same however the browser paints it. */
+.place-1 { --medal: 240, 196, 72; }
+.place-2 { --medal: 200, 210, 228; }
+.place-3 { --medal: 214, 138, 76; }
+.table tr.medal { background: linear-gradient(180deg, rgba(var(--medal), 0.26), rgba(var(--medal), 0.09)); }
+.deck.medal {
+  border-color: rgba(var(--medal), 0.5);
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(var(--medal), 0.30), transparent 70%),
+    linear-gradient(180deg, rgba(var(--medal), 0.16), rgba(var(--medal), 0.06)),
+    var(--card);
+}
+.deck.medal .info b { white-space: normal; }
 
 /* Player */
 /* The page takes on the player's most played colour: behind everything, strongest at the top. */
