@@ -18,6 +18,7 @@
   <script src="app.js" defer></script>
 </head>
 <body>
+  <div id="mana-wash" aria-hidden="true"></div>
   <header class="topbar">
     <div class="brand">
       <img src="icons/icon-192.png" alt="" width="30" height="30">
@@ -96,6 +97,22 @@
       <p id="td-note" class="muted small"></p>
       <div id="td-list" class="list"></div>
     </section>
+
+    <!-- Player -->
+    <section id="view-player" class="view" aria-label="Player" hidden>
+      <div class="card player-hero">
+        <div class="ph-top">
+          <div id="player-rank" class="ph-rank" aria-hidden="true"></div>
+          <div class="ph-who">
+            <select id="player-select" class="ph-select" aria-label="Player"></select>
+            <small id="player-place" class="muted"></small>
+          </div>
+        </div>
+        <div id="player-stats" class="ph-stats"></div>
+        <p id="player-note" class="muted small ph-note"></p>
+      </div>
+      <div id="player-body"></div>
+    </section>
   </main>
 
   <nav class="tabbar" aria-label="Sections">
@@ -110,6 +127,10 @@
     <button type="button" class="tab" data-view="standings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span>Standings</span>
+    </button>
+    <button type="button" class="tab" data-view="player">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4.2 4.2 0 1 0 0-8.4 4.2 4.2 0 0 0 0 8.4zM4.5 20.5a7.5 7.5 0 0 1 15 0" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Player</span>
     </button>
   </nav>
 

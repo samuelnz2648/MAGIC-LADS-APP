@@ -44,6 +44,7 @@ function doGet(e) {
   return respond_(() => {
     const action = (e && e.parameter && e.parameter.action) || 'data';
     if (action === 'data') return getData_();
+    if (action === 'games') return { games: allGames_(SpreadsheetApp.getActiveSpreadsheet()) };
     throw userError_('Unknown request.');
   });
 }
@@ -186,12 +187,22 @@ function usedGameRows_(g) {
 
 function recentGames_(ss) {
   const g = gameRows_(ss);
-  const rows = usedGameRows_(g).slice(-CFG.recentCount);
+  return gamesAt_(g, usedGameRows_(g).slice(-CFG.recentCount));
+}
+
+/** Every game on the Games sheet, newest first: the app's Player tab works out each player's stats from these. */
+function allGames_(ss) {
+  const g = gameRows_(ss);
+  return gamesAt_(g, usedGameRows_(g));
+}
+
+/** The games in these Games rows (top to bottom), newest first, as the sheet displays them. */
+function gamesAt_(g, rows) {
   if (!rows.length) return [];
   const top = rows[0];
-  // Only the rows shown are read as the sheet displays them (the slow kind of read).
+  // Only these rows are read as the sheet displays them (the slow kind of read).
   const display = g.sheet.getRange(top, 1, rows[rows.length - 1] - top + 1, GAMES_WIDTH).getDisplayValues();
-  return rows.reverse().map(row => {
+  return rows.slice().reverse().map(row => {
     const d = display[row - top];
     return {
       number: d[0],

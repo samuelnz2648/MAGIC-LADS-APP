@@ -9,7 +9,8 @@
 
 const API = String(window.MAGIC_LADS_API || '').trim();
 const API_READY = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(API) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(API);
-const STORE = { data: 'ml.data.v1', outbox: 'ml.outbox.v1', draft: 'ml.draft.v1', hint: 'ml.ioshint.v1', cards: 'ml.cards.v2' };
+const STORE = { data: 'ml.data.v1', outbox: 'ml.outbox.v1', draft: 'ml.draft.v1', hint: 'ml.ioshint.v1', cards: 'ml.cards.v2',
+  games: 'ml.games.v1', player: 'ml.player.v1' };
 const NEW_DECK = '__new__';
 const SEATS = 4;
 const STALE_MS = 30000;   // lists older than this are reloaded when you come back to the app
@@ -105,13 +106,13 @@ class NetworkError extends Error {}
 class BusyError extends NetworkError {}   // the tracker is reachable but briefly locked: try again soon
 class TrackerError extends Error {}
 
-async function call(method, body) {
+async function call(method, body, action = 'data') {
   if (!API_READY) throw new TrackerError('The app is not connected to the tracker yet (see config.js).');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 45000);
   let res;
   try {
-    const url = method === 'GET' ? `${API}?action=data&t=${Date.now()}` : API;
+    const url = method === 'GET' ? `${API}?action=${action}&t=${Date.now()}` : API;
     res = await fetch(url, method === 'GET'
       ? { cache: 'no-store', redirect: 'follow', signal: ctrl.signal }
       // text/plain keeps this a "simple" request, which Apps Script accepts from another site.
@@ -217,6 +218,10 @@ async function sendWaiting() {
   } finally {
     sending = false;
     saveOutbox();
+  }
+  if (done.some(d => d.item.type === 'logGame') && games) {
+    games.fetchedAt = 0;
+    if (currentView === 'player') loadGames();
   }
   if (done.length) await refresh({ quiet: true });
   else renderAll();
@@ -482,7 +487,8 @@ const RETRY_FAILED_MS = 60000;            // after a failed lookup (no signal, S
 const RECHECK_MISS_MS = 7 * 86400000;     // a name Scryfall didn't know is asked about again after a week
 const RECHECK_LOWRES_MS = 3 * 86400000;   // a card with only a preview scan (new sets) is checked for a proper one
 
-let cardInfo = load(STORE.cards, {});     // commander name (lower case) -> { cards: [{name, img}], at, lowres? } or { miss: true, at }
+const WUBRG = ['W', 'U', 'B', 'R', 'G'];
+let cardInfo = load(STORE.cards, {});     // commander name (lower case) -> { cards: [{name, img}], colors, at, lowres? } or { miss: true, at }
 try { localStorage.removeItem('ml.cards.v1'); } catch (e) { /* v1 picked the standard printing for "Alt name (Real name)" commanders */ }
 const cardLookups = new Map();            // name -> Promise, while it's being looked up
 const lookupFailed = new Map();           // name -> when its last lookup failed
@@ -493,6 +499,7 @@ const artSlots = new Map();               // where an image is shown -> its elem
 function cardKey(name) { return String(name || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
 
 function recheckDue(entry) {
+  if (!entry.miss && !entry.colors) return true;   // looked up before colours were kept (for the Player tab)
   const age = Date.now() - (entry.at || 0);
   return entry.miss ? age > RECHECK_MISS_MS : !!entry.lowres && age > RECHECK_LOWRES_MS;
 }
@@ -568,7 +575,8 @@ function cardFace(card) {
   const faces = card.card_faces || [];
   const uris = card.image_uris || (faces[0] && faces[0].image_uris);
   if (!uris || !uris.normal) return null;
-  return { name: card.flavor_name || card.printed_name || card.name, img: uris.normal, lowres: card.image_status !== 'highres_scan' };
+  return { name: card.flavor_name || card.printed_name || card.name, img: uris.normal,
+    lowres: card.image_status !== 'highres_scan', ci: card.color_identity || [] };
 }
 
 /** A commander written with its card's real name in brackets, "Chun-Li, Countless Kicks (Zethi, Arcane
@@ -594,7 +602,9 @@ async function findByName(name) {
       // Both halves of "A // B" can find the same double-faced card: show it once.
       const cards = found.filter((c, i) => !c || found.findIndex(d => d && d.img === c.img) === i);
       if (found.every(Boolean)) {
-        return { cards: cards.map(c => ({ name: c.name, img: c.img })), lowres: cards.some(c => c.lowres) || undefined, at: Date.now() };
+        const ci = new Set(cards.flatMap(c => c.ci));
+        return { cards: cards.map(c => ({ name: c.name, img: c.img })), colors: WUBRG.filter(c => ci.has(c)),
+          lowres: cards.some(c => c.lowres) || undefined, at: Date.now() };
       }
     }
   }
@@ -812,6 +822,198 @@ function renderStandings() {
     : [h('p', { class: 'empty', text: data ? 'No decks have enough games yet.' : 'Loading…' })]));
 }
 
+// --------------------------------------------------------------------------- player
+
+// Rank, adjusted win %, record and best commander are the Dashboard's (so they match the sheet, bracket
+// filter and all). Colours, nemesis and recent games are worked out here from every game on the Games sheet.
+
+const COLOURS = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', C: 'Colourless' };
+const COLOUR_ORDER = ['W', 'U', 'B', 'R', 'G', 'C'];
+// The page's background in the player's most played colour: strong enough to read as that colour,
+// dark enough for the text on top.
+const WASH = {   // colour, strength at the top, strength further down
+  W: ['246, 230, 180', 0.32, 0.13], U: ['36, 120, 214', 0.58, 0.24], B: ['150, 104, 172', 0.50, 0.20],
+  R: ['222, 52, 46', 0.54, 0.22], G: ['24, 150, 86', 0.54, 0.22], C: ['196, 190, 184', 0.30, 0.11],
+};
+const MEDALS = { 1: '🥇', 2: '🥈', 3: '🥉' };
+const manaUrl = c => `https://svgs.scryfall.io/card-symbols/${c}.svg`;
+
+let games = load(STORE.games, null);      // { list: every game, newest first, fetchedAt } or { unsupported: true, fetchedAt }
+let pickedPlayer = load(STORE.player, '');
+
+function gamesStale() { return !games || Date.now() - games.fetchedAt > STALE_MS; }
+
+/** Loads every game from the tracker (its own request: the Player tab is the only thing that needs them). */
+let gamesRun = null;
+function loadGames() {
+  if (gamesRun) return gamesRun;
+  gamesRun = (async () => {
+    try {
+      const res = await call('GET', null, 'games');
+      games = { list: res.games || [], fetchedAt: Date.now() };
+    } catch (e) {
+      // The tracker's Apps Script is older than the Player tab: say so, and ask again later in case it's updated.
+      if (e instanceof TrackerError && /unknown request/i.test(e.message)) games = { unsupported: true, fetchedAt: Date.now() };
+      else return;   // no signal or busy: keep the games saved on the phone
+    }
+    save(STORE.games, games);
+  })().finally(() => { gamesRun = null; renderPlayer(); });
+  return gamesRun;
+}
+
+function ordinal(n) {
+  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
+  return n + s;
+}
+
+/** A leaderboard row's place: the Rank column shows medals for the top 3. */
+function placeOf(row, index) {
+  const medal = Object.keys(MEDALS).find(k => MEDALS[k] === row.Rank);
+  if (medal) return Number(medal);
+  return /^\d+$/.test(row.Rank) ? Number(row.Rank) : index + 1;
+}
+
+/** What the games say about a player: colours, nemesis, recent games. Null until the games are loaded. */
+function playerStats(name) {
+  if (!games || !games.list) return null;
+  const mine = games.list.filter(g => g.status === 'OK' && g.players.includes(name));
+  const counts = {}, beats = {}, together = {}, beatWith = {};
+  const unknown = new Set();
+  for (const g of mine) {
+    const cmd = g.commanders[g.players.indexOf(name)];
+    const e = cardInfo[cardKey(cmd)];
+    if (e && e.colors) (e.colors.length ? e.colors : ['C']).forEach(c => { counts[c] = (counts[c] || 0) + 1; });
+    else if (cmd && !(e && e.miss)) unknown.add(cmd);
+    g.players.forEach(p => { if (p && p !== name) together[p] = (together[p] || 0) + 1; });
+    if (g.winner && g.winner !== name) {
+      beats[g.winner] = (beats[g.winner] || 0) + 1;
+      const by = beatWith[g.winner] = beatWith[g.winner] || {};
+      by[g.winningCommander] = (by[g.winningCommander] || 0) + 1;
+    }
+  }
+  const colours = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || COLOUR_ORDER.indexOf(a[0]) - COLOUR_ORDER.indexOf(b[0]))
+    .slice(0, 2).map(([c, n]) => ({ c, n }));
+  // Nemesis: whoever has beaten them most; on a tie, whoever beats them more often when they play.
+  let nemesis = null;
+  for (const [p, wins] of Object.entries(beats)) {
+    const rate = wins / together[p];
+    if (!nemesis || wins > nemesis.wins || (wins === nemesis.wins && rate > nemesis.rate)) nemesis = { name: p, wins, games: together[p], rate };
+  }
+  if (nemesis) nemesis.with = Object.entries(beatWith[nemesis.name]).sort((a, b) => b[1] - a[1])[0];
+  return { mine, colours, unknown: Array.from(unknown), nemesis };
+}
+
+/** Looks up the colours of commanders not looked up yet (one batched request), then re-draws. */
+let colourLookups = false;
+function lookUpColours(names) {
+  if (colourLookups || !names.length || !navigator.onLine) return;
+  colourLookups = true;
+  Promise.all(names.map(n => lookupCommander(n))).then(found => {
+    colourLookups = false;
+    if (found.some(e => e && (e.colors || e.miss))) renderPlayer();
+  });
+}
+
+function manaSymbol(c) {
+  const url = manaUrl(c);
+  const ready = imageUrls.get(url);
+  const img = h('img', { class: 'mana', alt: '', src: ready || null });
+  if (!ready) storedImage(url).then(src => { img.src = src; });
+  return img;
+}
+
+function setWash(colour) {
+  const wash = $('#mana-wash');
+  if (colour) {
+    const [rgb, top, low] = WASH[colour];
+    wash.style.setProperty('--wash', `rgba(${rgb}, ${top})`);
+    wash.style.setProperty('--wash-low', `rgba(${rgb}, ${low})`);
+  }
+  wash.classList.toggle('on', !!colour);
+}
+
+function renderPlayer() {
+  const players = (data && data.players) || [];
+  const lb = data && data.leaderboard;
+  const rows = (lb && lb.rows) || [];
+  const ranked = rows.filter(r => Number(r.Games) > 0);
+  if (!players.includes(pickedPlayer)) pickedPlayer = (ranked[0] && ranked[0].Player) || players[0] || '';
+
+  const sel = $('#player-select');
+  sel.replaceChildren(...(players.length ? players.map(p => h('option', { value: p, selected: p === pickedPlayer, text: p }))
+    : [h('option', { text: data ? 'No players yet' : 'Loading…' })]));
+  sel.disabled = !players.length;
+
+  const body = $('#player-body');
+  const name = pickedPlayer;
+  if (!name) { body.replaceChildren(); $('#player-rank').textContent = ''; $('#player-place').textContent = ''; setWash(null); return; }
+
+  // Leaderboard: place, adjusted win %, record.
+  const row = rows.find(r => r.Player === name);
+  const playedAny = row && Number(row.Games) > 0;
+  const place = playedAny ? placeOf(row, ranked.indexOf(row)) : 0;
+  $('#player-rank').textContent = place ? (MEDALS[place] || `#${place}`) : '–';
+  $('#player-rank').classList.toggle('medal', !!MEDALS[place]);
+  $('#player-place').textContent = place ? `${ordinal(place)} of ${ranked.length} on the leaderboard` : 'Not on the leaderboard yet';
+  const wins = playedAny ? Number(row.Wins) : 0;
+  const played = playedAny ? Number(row.Games) : 0;
+  $('#player-stats').replaceChildren(
+    h('div', { class: 'pstat' }, h('span', { class: 'label', text: 'Adj. win %' }), h('b', { class: 'adj', text: playedAny ? row['Adj. Win %'] : '–' }),
+      h('small', { text: playedAny ? `win ${row['Win %']}` : 'no games yet' })),
+    h('div', { class: 'pstat' }, h('span', { class: 'label', text: 'Record' }), h('b', { text: playedAny ? `${wins}–${played - wins}` : '–' }),
+      h('small', { text: playedAny ? `${wins} win${wins === 1 ? '' : 's'} · ${played} game${played === 1 ? '' : 's'}` : '' })));
+  $('#player-note').textContent = caption(lb);
+
+  const st = playerStats(name);
+  if (st && currentView === 'player') lookUpColours(st.unknown);
+  const fromGames = st ? null
+    : games && games.unsupported ? "Update the tracker's Apps Script to see this (see the README)."
+    : !navigator.onLine ? 'Connect once to load the games.' : 'Loading games…';
+  const waiting = text => h('p', { class: 'muted small', text });
+
+  // Best commander, with its card.
+  const best = playedAny ? row['Best Commander'] : '';
+  const bestGames = st && best ? st.mine.filter(g => g.commanders[g.players.indexOf(name)] === best) : [];
+  const bestWins = bestGames.filter(g => g.winner === name).length;
+  const bestCard = h('div', { class: 'card player-best' },
+    best ? cardArt(best, 'player:best', 'best-art') : h('div', { class: 'card-art best-art', 'aria-hidden': 'true' }),
+    h('div', { class: 'info' },
+      h('span', { class: 'label', text: 'Best commander' }),
+      h('b', { text: best || 'None yet' }),
+      bestGames.length ? h('small', { text: `Won ${bestWins} of ${bestGames.length} game${bestGames.length === 1 ? '' : 's'}` }) : null));
+
+  // Most played colours, with mana symbols. The page takes on the top one.
+  const colourCard = h('div', { class: 'card player-colours' }, h('span', { class: 'label', text: 'Most played colours' }),
+    !st ? waiting(fromGames)
+      : st.colours.length ? st.colours.map(({ c, n }) => h('div', { class: 'mana-row' }, manaSymbol(c),
+        h('div', {}, h('b', { text: COLOURS[c] }), h('small', { text: `${n} of ${st.mine.length} games` }))))
+      : waiting(st.mine.length ? 'Looking up commanders…' : 'No games yet.'));
+  setWash(st && st.colours[0] ? st.colours[0].c : null);
+
+  const nem = st && st.nemesis;
+  const nemesisCard = h('div', { class: 'card player-nemesis' }, h('span', { class: 'label', text: 'Nemesis' }),
+    !st ? waiting(fromGames)
+      : nem ? [h('b', { class: 'nemesis-name', text: nem.name }),
+        h('small', { text: `Won ${nem.wins} of ${nem.games} game${nem.games === 1 ? '' : 's'} against ${name}` }),
+        h('small', { class: 'muted', text: `${nem.with[1] > 1 ? 'Mostly with' : 'With'} ${nem.with[0]}` })]
+      : waiting(st.mine.length ? 'Unbeaten so far.' : 'No games yet.'));
+
+  const recentCard = h('div', { class: 'card player-recent' }, h('span', { class: 'label', text: 'Recent games' }),
+    !st ? waiting(fromGames)
+      : st.mine.length ? h('ul', { class: 'presults' }, st.mine.slice(0, 5).map(g => {
+        const won = g.winner === name;
+        return h('li', { class: won ? 'won' : '' },
+          h('span', { class: 'res', text: won ? 'W' : 'L' }),
+          h('div', { class: 'what' },
+            h('b', { text: g.commanders[g.players.indexOf(name)] }),
+            h('small', { text: [`#${g.number}`, niceDate(g.date), won ? 'Won' : `${g.winner} won with ${g.winningCommander}`].join(' · ') })));
+      }))
+      : waiting('No games yet.'));
+
+  body.replaceChildren(bestCard, h('div', { class: 'pgrid' }, colourCard, nemesisCard), recentCard);
+}
+
 // --------------------------------------------------------------------------- status, outbox, toast
 
 function renderStatus() {
@@ -890,6 +1092,7 @@ function renderAll() {
   renderForm();
   renderRecent();
   renderStandings();
+  renderPlayer();
 }
 
 // --------------------------------------------------------------------------- navigation, install, start-up
@@ -901,7 +1104,12 @@ function show(view) {
   window.scrollTo(0, 0);
   if (view !== currentView) play($(`#view-${view}`), VIEW_IN);
   currentView = view;
+  document.body.dataset.view = view;
   if (view === 'recent') markNewGames();
+  if (view === 'player') {
+    renderPlayer();
+    if (API_READY && navigator.onLine && gamesStale()) loadGames();
+  }
   if (view !== 'log' && online && data && isStale()) refresh({ quiet: true });
 }
 
@@ -916,8 +1124,15 @@ function setup() {
   document.addEventListener('touchstart', () => {}, { passive: true });   // lets iOS show the :active press
   $$('.tab').forEach(t => t.addEventListener('click', () => show(t.dataset.view)));
   $('#refresh').addEventListener('click', async () => {
+    if (currentView === 'player') loadGames();
     const done = await flushOutbox();   // sending reloads the lists itself
     if (!done.length) await refresh();
+  });
+  $('#player-select').addEventListener('change', e => {
+    pickedPlayer = e.target.value;
+    save(STORE.player, pickedPlayer);
+    renderPlayer();
+    play($('#player-body'), VIEW_IN);
   });
   $('#game-form').addEventListener('submit', submitGame);
   $('#date').addEventListener('change', e => { draft.date = e.target.value || todayLocal(); saveDraft(); });
@@ -951,11 +1166,13 @@ function setup() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     sync();
+    if (currentView === 'player' && gamesStale()) loadGames();
     // Phones often resume the app instead of reopening it, so check for a new version here too.
     if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
   });
   setInterval(() => { if (outbox.some(i => !i.error)) flushOutbox(); }, 60000);
 
+  document.body.dataset.view = currentView;
   draft.date = todayLocal();   // a fresh start is a new day's games; change the date to back-log
   pruneDraft();
   renderAll();
