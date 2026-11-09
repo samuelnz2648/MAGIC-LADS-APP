@@ -859,12 +859,29 @@ function caption(table) {
   return ((table && table.note) || '').split(' · ').filter(p => !/^see /i.test(p)).join(' · ');
 }
 
+const MEDALS = { 1: '🥇', 2: '🥈', 3: '🥉' };
+
+/** The place a Rank cell shows (the Dashboard puts medals on the top 3), or 0 for none ("–"). */
+function rankNumber(rank) {
+  const medal = Object.keys(MEDALS).find(k => MEDALS[k] === rank);
+  return medal ? Number(medal) : /^\d+$/.test(rank) ? Number(rank) : 0;
+}
+/** A leaderboard row's place, counting down the table where the Rank cell doesn't say. */
+function placeOf(row, index) {
+  return rankNumber(row.Rank) || index + 1;
+}
+/** Gold, silver and bronze backgrounds for the top three. */
+function medalClass(row) {
+  const n = rankNumber(row.Rank);
+  return n >= 1 && n <= 3 ? `medal place-${n}` : null;
+}
+
 function renderStandings() {
   const lb = data && data.leaderboard;
   $('#lb-note').textContent = caption(lb);
   $('#lb-table tbody').replaceChildren(...(lb && lb.rows.length ? lb.rows.map(r => {
     const idle = !Number(r.Games);
-    return h('tr', { class: idle ? 'idle' : null },
+    return h('tr', { class: idle ? 'idle' : medalClass(r) },
       h('td', { class: 'rank', text: r.Rank }),
       h('td', { class: 'player' }, h('b', { text: r.Player }), !idle && r['Best Commander'] ? h('small', { text: `Best: ${r['Best Commander']}` }) : null),
       h('td', { class: 'num', text: idle ? '–' : `${r.Wins}/${r.Games}` }),
@@ -875,10 +892,14 @@ function renderStandings() {
   const td = data && data.topDecks;
   const rows = (td && td.rows) || [];
   $('#td-note').textContent = caption(td);
-  $('#td-list').replaceChildren(...(rows.length ? rows.map(r => h('div', { class: 'deck' },
-    h('div', { class: 'rank', text: r.Rank }),
-    h('div', { class: 'info' }, h('b', { text: r.Commander }), h('small', { text: `${r.Player} · ${r.Bracket} · ${r.Wins}/${r.Games} wins` })),
-    h('div', { class: 'score' }, h('b', { class: 'adj', text: r['Adj. Win %'] }), h('small', { text: `win ${r['Win %']}` }))))
+  $('#td-list').replaceChildren(...(rows.length ? rows.map((r, i) => {
+    const medal = medalClass(r);
+    return h('div', { class: medal ? `deck ${medal}` : 'deck' },
+      h('div', { class: 'rank', text: r.Rank }),
+      medal ? cardArt(r.Commander, `deck:${i}`, 'deck-art') : null,   // the top three show their card
+      h('div', { class: 'info' }, h('b', { text: r.Commander }), h('small', { text: `${r.Player} · ${r.Bracket} · ${r.Wins}/${r.Games} wins` })),
+      h('div', { class: 'score' }, h('b', { class: 'adj', text: r['Adj. Win %'] }), h('small', { text: `win ${r['Win %']}` })));
+  })
     : [h('p', { class: 'empty', text: orLoading('No decks have enough games yet.') })]));
 }
 
@@ -895,7 +916,6 @@ const WASH = {   // colour, strength at the top, strength further down
   W: ['246, 230, 180', 0.32, 0.13], U: ['36, 120, 214', 0.58, 0.24], B: ['150, 104, 172', 0.50, 0.20],
   R: ['222, 52, 46', 0.54, 0.22], G: ['24, 150, 86', 0.54, 0.22], C: ['196, 190, 184', 0.30, 0.11],
 };
-const MEDALS = { 1: '🥇', 2: '🥈', 3: '🥉' };
 const manaUrl = c => `https://svgs.scryfall.io/card-symbols/${c}.svg`;
 
 function gamesStale() { return !games || Date.now() - games.fetchedAt > STALE_MS; }
@@ -926,13 +946,6 @@ function loadGamesIfStale() {
 function ordinal(n) {
   const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
   return n + s;
-}
-
-/** A leaderboard row's place: the Rank column shows medals for the top 3. */
-function placeOf(row, index) {
-  const medal = Object.keys(MEDALS).find(k => MEDALS[k] === row.Rank);
-  if (medal) return Number(medal);
-  return /^\d+$/.test(row.Rank) ? Number(row.Rank) : index + 1;
 }
 
 /** What the games say about a player: colours, nemesis, recent games. Null until the games are loaded. */
