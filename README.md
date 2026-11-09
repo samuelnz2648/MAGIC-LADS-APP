@@ -7,6 +7,7 @@ A phone app for logging Magic Lads commander games straight into the group track
 - **Card images:** each seat shows its commander's card, and each Recent game shows the winning commander's card. Tap one to see it big. Images come from Scryfall: each commander is looked up once, then the image is stored on the phone (it shows offline too, and survives app updates). Partner and background pairs written `A // B` show both cards.
 - **Recent:** the last 10 games, newest first. The app can only add games: to fix or delete one, edit it on the Games sheet.
 - **Standings:** the Dashboard's Leaderboard and Top Decks (they follow the Dashboard's Bracket filter).
+- **Player:** pick a player to see their place on the leaderboard, adjusted win %, record (wins–losses) and best commander (with its card), from the Dashboard; plus their two most played colours (with mana symbols, from their commanders' colour identities on Scryfall), their nemesis (whoever has beaten them most) and their last 5 games, worked out from every game on the Games sheet. The page takes on the colour they play most.
 - **No signal?** The app still opens with the last lists it loaded. Games and new commanders logged offline wait on the phone and are sent, in order, as soon as it's back online. Sending the same game twice never logs it twice.
 
 ## How it fits together
