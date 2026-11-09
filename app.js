@@ -9,7 +9,7 @@
 
 const API = String(window.MAGIC_LADS_API || '').trim();
 const API_READY = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(API) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(API);
-const STORE = { data: 'ml.data.v1', outbox: 'ml.outbox.v1', draft: 'ml.draft.v1', hint: 'ml.ioshint.v1', cards: 'ml.cards.v1' };
+const STORE = { data: 'ml.data.v1', outbox: 'ml.outbox.v1', draft: 'ml.draft.v1', hint: 'ml.ioshint.v1', cards: 'ml.cards.v2' };
 const NEW_DECK = '__new__';
 const SEATS = 4;
 const STALE_MS = 30000;   // lists older than this are reloaded when you come back to the app
@@ -483,6 +483,7 @@ const RECHECK_MISS_MS = 7 * 86400000;     // a name Scryfall didn't know is aske
 const RECHECK_LOWRES_MS = 3 * 86400000;   // a card with only a preview scan (new sets) is checked for a proper one
 
 let cardInfo = load(STORE.cards, {});     // commander name (lower case) -> { cards: [{name, img}], at, lowres? } or { miss: true, at }
+try { localStorage.removeItem('ml.cards.v1'); } catch (e) { /* v1 picked the standard printing for "Alt name (Real name)" commanders */ }
 const cardLookups = new Map();            // name -> Promise, while it's being looked up
 const lookupFailed = new Map();           // name -> when its last lookup failed
 const imageUrls = new Map();              // image address -> blob: URL of the copy stored on the phone
@@ -554,8 +555,6 @@ function cardNames(card) {
 /** The ways to find a commander on Scryfall, best first. Each way is a list of names that must all
  *  find a card: one for most commanders, two for partners and backgrounds ("Alena… // Gilanra…"). */
 function lookupPlans(name) {
-  const paren = name.match(/^(.+?)\s*\(([^()]+)\)\s*$/);   // "Chun-Li, Countless Kicks (Zethi, Arcane Blademaster)"
-  if (paren) return lookupPlans(paren[1]).concat(lookupPlans(paren[2]));
   if (!name.includes('//')) return [[name]];
   const parts = name.split('//').map(s => s.trim()).filter(Boolean);
   return [
@@ -569,12 +568,24 @@ function cardFace(card) {
   const faces = card.card_faces || [];
   const uris = card.image_uris || (faces[0] && faces[0].image_uris);
   if (!uris || !uris.normal) return null;
-  return { name: card.name, img: uris.normal, lowres: card.image_status !== 'highres_scan' };
+  return { name: card.flavor_name || card.printed_name || card.name, img: uris.normal, lowres: card.image_status !== 'highres_scan' };
+}
+
+/** A commander written with its card's real name in brackets, "Chun-Li, Countless Kicks (Zethi, Arcane
+ *  Blademaster)", is looked up by the name it's printed under first, so it shows that printing's art. */
+async function findCards(name) {
+  const paren = name.match(/^(.+?)\s*\(([^()]+)\)\s*$/);
+  for (const n of paren ? [paren[1], paren[2]] : [name]) {
+    const entry = await findByName(n);
+    if (entry) return entry;
+  }
+  return { miss: true, at: Date.now() };
 }
 
 /** First by exact name (batched with the other commanders on screen), then with Scryfall's forgiving
- *  search, which copes with typos and other names for a card but answers one name at a time. */
-async function findCards(name) {
+ *  search, which answers one name at a time but copes with typos and finds Universes Beyond and
+ *  Secret Lair names ("Zombie Scarlet Witch") on the printing that uses them. */
+async function findByName(name) {
   const plans = lookupPlans(name);
   const fuzzy = part => scryfall(`/cards/named?fuzzy=${encodeURIComponent(part)}`);
   for (const find of [cardByName, fuzzy]) {
@@ -587,7 +598,7 @@ async function findCards(name) {
       }
     }
   }
-  return { miss: true, at: Date.now() };
+  return null;
 }
 
 /** Looks a commander up on Scryfall and saves the answer. Resolves to what's known if it can't. */
