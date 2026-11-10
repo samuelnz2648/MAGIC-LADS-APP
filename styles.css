@@ -272,6 +272,10 @@ body[data-view="player"] #mana-wash.on { opacity: 1; }
   font-size: 24px; font-weight: 800; line-height: 1.25; background-position: right 2px center;
 }
 .ph-select:focus { box-shadow: none; text-decoration: underline; text-decoration-color: var(--gold); text-underline-offset: 4px; }
+/* Chrome and Edge on a PC draw a select's list in the select's own colours. This one is see-through
+   (it sits on the card as a big title), so its list came out white: give the options the app's
+   colours and normal-size text, like the Log game tab's lists. */
+.ph-select option { background-color: var(--bg-2); color: var(--text); font-size: 15px; font-weight: 400; }
 .ph-who small { display: block; font-size: 13px; }
 .ph-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
 .pstat { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
